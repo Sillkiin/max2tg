@@ -92,7 +92,14 @@ class BrowserMaxClient(MaxClient):
             )
         return token
 
-    async def login_by_token(self, token: str):
+    async def login_by_token(
+        self,
+        token: str,
+        *,
+        chats_sync: int = 0,
+        contacts_sync: int = 0,
+        chats_count: int = 40,
+    ):
         """Log in with a saved login token (opcode 19).
 
         Reimplemented from vkmax because its version crashes on a logging
@@ -106,11 +113,11 @@ class BrowserMaxClient(MaxClient):
             payload={
                 "interactive": True,
                 "token": token,
-                "chatsSync": 0,
-                "contactsSync": 0,
+                "chatsSync": chats_sync,
+                "contactsSync": contacts_sync,
                 "presenceSync": 0,
                 "draftsSync": 0,
-                "chatsCount": 40,
+                "chatsCount": chats_count,
             },
         )
         payload = response.get("payload", {})

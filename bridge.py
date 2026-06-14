@@ -19,6 +19,7 @@ import attaches
 import mediamax
 import tg
 from max_client import BrowserMaxClient, MaxAuthError
+from state import BridgeState, normalize_topic_title
 
 _logger = logging.getLogger(__name__)
 
@@ -51,15 +52,32 @@ def _extract_own_id(login_response: dict) -> int | None:
 
 
 def _contact_display_name(contact: dict) -> str | None:
+    """Pick the fullest available name (first+last) to match MAX's display.
+
+    MAX returns several name candidates; `names[0].name` is often just the first
+    name, so we collect all candidates and choose the fullest (most words).
+    """
+    candidates: list[str] = []
     names = contact.get("names")
-    if isinstance(names, list) and names and isinstance(names[0], dict):
-        name = names[0].get("name")
-        if name:
-            return name
-    first = contact.get("firstName", "")
-    last = contact.get("lastName", "")
-    full = f"{first} {last}".strip()
-    return full or contact.get("name") or None
+    if isinstance(names, list):
+        for entry in names:
+            if not isinstance(entry, dict):
+                continue
+            full = f"{entry.get('firstName', '')} {entry.get('lastName', '')}".strip()
+            if full:
+                candidates.append(full)
+            if entry.get("name"):
+                candidates.append(str(entry["name"]).strip())
+    full = f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip()
+    if full:
+        candidates.append(full)
+    if contact.get("name"):
+        candidates.append(str(contact["name"]).strip())
+    candidates = [c for c in candidates if c]
+    if not candidates:
+        return None
+    # Prefer the fullest: most words first, then longest string.
+    return max(candidates, key=lambda s: (len(s.split()), len(s)))
 
 
 def _log_raw_attaches(message: dict) -> None:
@@ -83,22 +101,34 @@ class MaxToTelegramBridge:
         self._config = config
         self._token = config["telegram_bot_token"]
         self._chat_id = config["telegram_chat_id"]
+        self._fallback_chat_id = config.get("telegram_fallback_chat_id", self._chat_id)
+        self._forum_chat_id = config.get("telegram_forum_chat_id")
+        self._topics_enabled = bool(
+            config.get("telegram_topics_enabled") and self._forum_chat_id
+        )
+        # One-shot: re-resolve and rename all topic titles from MAX, even ones
+        # that already have a "good-looking" name (corrects drifted/short names).
+        self._resync_titles = bool(config.get("telegram_resync_titles"))
         self._own_id: int | None = None
         self._name_cache: dict[int, str] = {}
         self._client: MaxClient | None = None
+        self._state = BridgeState()
         # telegram message_id -> {"chat_id", "message_id", "sender"}
         self._reply_map: "OrderedDict[int, dict]" = OrderedDict()
 
     # --- helpers -------------------------------------------------------------
 
     def _remember(self, tg_message_id: int | None, max_chat_id, max_message_id,
-                  sender: str) -> None:
+                  sender: str, telegram_chat_id=None,
+                  message_thread_id: int | None = None) -> None:
         if not tg_message_id:
             return
         self._reply_map[tg_message_id] = {
             "chat_id": max_chat_id,
             "message_id": max_message_id,
             "sender": sender,
+            "telegram_chat_id": telegram_chat_id or self._fallback_chat_id,
+            "message_thread_id": message_thread_id,
         }
         while len(self._reply_map) > REPLY_MAP_LIMIT:
             self._reply_map.popitem(last=False)
@@ -118,6 +148,276 @@ class MaxToTelegramBridge:
             _logger.warning("Could not resolve user %s: %s", sender_id, exc)
         self._name_cache[sender_id] = name
         return name
+
+    def _extract_chat_meta(self, payload: dict, sender: str) -> tuple[str, str]:
+        chat_id = payload.get("chatId")
+        message = payload.get("message", {})
+        chat = payload.get("chat") if isinstance(payload.get("chat"), dict) else {}
+        candidates = [
+            chat.get("title"),
+            chat.get("name"),
+            chat.get("theme"),
+            payload.get("title"),
+            payload.get("chatTitle"),
+            message.get("chatTitle") if isinstance(message, dict) else None,
+        ]
+        title = next((str(value).strip() for value in candidates if value), "")
+        chat_type = str(
+            chat.get("type") or chat.get("chatType") or payload.get("chatType") or ""
+        ).lower()
+        if not title:
+            title = sender if sender and sender != "неизвестный отправитель" else f"MAX чат {chat_id}"
+        if not chat_type:
+            chat_type = "dialog"
+        return title, chat_type
+
+    @staticmethod
+    def _sync_chat_id(chat: dict):
+        for key in ("id", "chatId", "chat_id", "cid"):
+            value = chat.get(key)
+            if value not in (None, 0, "0"):
+                return value
+        return None
+
+    def _dialog_peer_id(self, chat: dict):
+        participants = chat.get("participants")
+        if not isinstance(participants, dict):
+            return chat.get("cid")
+        for raw_id in participants:
+            try:
+                participant_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if participant_id != self._own_id:
+                return participant_id
+        return chat.get("cid")
+
+    async def _sync_chat_meta(self, client: MaxClient, chat: dict) -> tuple[str, str, str]:
+        chat_id = self._sync_chat_id(chat)
+        chat_type = str(chat.get("type") or chat.get("chatType") or "dialog").lower()
+        title = next(
+            (
+                str(value).strip()
+                for value in (
+                    chat.get("title"),
+                    chat.get("name"),
+                    chat.get("displayName"),
+                )
+                if value
+            ),
+            "",
+        )
+
+        if chat_type == "dialog":
+            # MAX shows the peer's full contact name for dialogs, which is more
+            # reliable than the chat's own (often missing/partial) title field.
+            contact_id = self._dialog_peer_id(chat) or chat.get("cid") or chat_id
+            if isinstance(contact_id, int):
+                resolved = await self._resolve_sender_name(client, contact_id)
+                if resolved and not str(resolved).isdigit():
+                    title = resolved
+
+        fallback = f"MAX chat {chat_id}"
+        title = normalize_topic_title(title, fallback)
+        sender = title if title != fallback else None
+        return title, chat_type, sender or fallback
+
+    @staticmethod
+    def _is_numeric_title(value: str | None) -> bool:
+        return bool(value) and str(value).strip().lstrip("-").isdigit()
+
+    async def _refresh_topic_title(self, max_chat_id, thread_id: int,
+                                   title: str, chat_type: str,
+                                   sender: str) -> bool:
+        existing = self._state.get_topic(max_chat_id) or {}
+        current = str(existing.get("title") or "").strip()
+        if not title or title == current or self._is_numeric_title(title):
+            return False
+        # Normally we don't overwrite an already-good name (respects manual
+        # edits). In resync mode we apply the freshly-resolved name regardless.
+        if not self._resync_titles:
+            if current and not self._is_numeric_title(current) and not current.startswith("MAX chat "):
+                return False
+        try:
+            await asyncio.to_thread(
+                tg.edit_forum_topic,
+                self._token,
+                self._forum_chat_id,
+                thread_id,
+                title,
+            )
+        except Exception as exc:
+            _logger.warning("Could not rename Telegram topic for MAX chat %s: %s",
+                            max_chat_id, exc)
+            return False
+        self._state.save_topic(
+            max_chat_id,
+            thread_id=thread_id,
+            title=title,
+            chat_type=chat_type,
+            sender=sender,
+        )
+        _logger.info("Renamed Telegram topic %s for MAX chat %s to %s",
+                     thread_id, max_chat_id, title)
+        return True
+
+    async def _preload_topics_from_login(self, client: MaxClient, login_response: dict) -> None:
+        if not self._topics_enabled or not self._config.get("telegram_preload_topics"):
+            return
+
+        chats = login_response.get("payload", {}).get("chats", [])
+        if not isinstance(chats, list):
+            return
+
+        limit = int(self._config.get("telegram_preload_chat_count") or 100)
+        created = existing = failed = skipped = seeded = 0
+        for chat in chats[:limit]:
+            if not isinstance(chat, dict):
+                skipped += 1
+                continue
+            chat_id = self._sync_chat_id(chat)
+            if chat_id is None:
+                skipped += 1
+                continue
+            existing_topic = self._state.get_topic(chat_id)
+            if existing_topic:
+                existing += 1
+                thread_id = existing_topic.get("telegram_thread_id")
+                if thread_id:
+                    title, chat_type, sender = await self._sync_chat_meta(client, chat)
+                    await self._refresh_topic_title(
+                        chat_id, thread_id, title, chat_type, sender
+                    )
+                    if await self._seed_last_message(
+                        client, chat_id, thread_id, chat.get("lastMessage")
+                    ):
+                        seeded += 1
+                continue
+
+            title, chat_type, sender = await self._sync_chat_meta(client, chat)
+            _target_chat_id, thread_id, in_topic = await self._telegram_target(
+                chat_id, title, chat_type, sender
+            )
+            if in_topic and thread_id:
+                created += 1
+                if await self._seed_last_message(
+                    client, chat_id, thread_id, chat.get("lastMessage")
+                ):
+                    seeded += 1
+            else:
+                failed += 1
+            await asyncio.sleep(0.35)
+
+        _logger.info(
+            "Topic preload finished: %s created, %s existing, %s seeded, %s failed, %s skipped.",
+            created, existing, seeded, failed, skipped,
+        )
+
+    async def _telegram_target(self, max_chat_id, title: str, chat_type: str,
+                               sender: str) -> tuple[int | str, int | None, bool]:
+        if not self._topics_enabled:
+            return self._fallback_chat_id, None, False
+
+        existing = self._state.get_topic(max_chat_id)
+        if existing and existing.get("telegram_thread_id"):
+            self._state.save_topic(
+                max_chat_id,
+                thread_id=existing["telegram_thread_id"],
+                title=existing.get("title") or title,
+                chat_type=existing.get("chat_type") or chat_type,
+                sender=sender,
+            )
+            return self._forum_chat_id, existing["telegram_thread_id"], True
+
+        topic_title = normalize_topic_title(title, f"MAX чат {max_chat_id}")
+        try:
+            thread_id = await asyncio.to_thread(
+                tg.create_forum_topic, self._token, self._forum_chat_id, topic_title
+            )
+        except Exception as exc:
+            _logger.warning("Could not create Telegram topic for MAX chat %s: %s",
+                            max_chat_id, exc)
+            return self._fallback_chat_id, None, False
+
+        self._state.save_topic(
+            max_chat_id,
+            thread_id=thread_id,
+            title=topic_title,
+            chat_type=chat_type,
+            sender=sender,
+        )
+        _logger.info("Created Telegram topic %s for MAX chat %s (%s)",
+                     thread_id, max_chat_id, topic_title)
+        return self._forum_chat_id, thread_id, True
+
+    @staticmethod
+    def _topic_body(sender: str, text: str, notes: list[str]) -> str:
+        body = "\n".join(part for part in [text, *notes] if part)
+        return f"{sender}:\n{body}" if body else f"{sender}:"
+
+    async def _message_sender_name(self, client: MaxClient, sender_id) -> str:
+        if sender_id is not None and sender_id == self._own_id:
+            return "Вы"
+        if isinstance(sender_id, int):
+            return await self._resolve_sender_name(client, sender_id)
+        return "MAX"
+
+    async def _seed_last_message(self, client: MaxClient, chat_id, thread_id: int,
+                                 message: dict) -> bool:
+        if not self._config.get("telegram_seed_last_messages"):
+            return False
+        if not isinstance(message, dict):
+            return False
+        message_id = message.get("id")
+        if message_id is None:
+            return False
+
+        topic = self._state.get_topic(chat_id) or {}
+        if str(topic.get("last_seeded_max_message_id")) == str(message_id):
+            return False
+
+        text = (message.get("text") or "").strip()
+        parsed = attaches.parse(message)
+        resolvable = {"file_resolve", "video_resolve"}
+        media = [item for item in parsed if item.kind in _MEDIA_SENDERS]
+        to_resolve = [item for item in parsed if item.kind in resolvable]
+        notes = [
+            item.text for item in parsed
+            if item.kind not in _MEDIA_SENDERS and item.kind not in resolvable
+        ]
+        if not text and not notes and not media and not to_resolve:
+            return False
+
+        sender = await self._message_sender_name(client, message.get("sender"))
+        first_msg_id = None
+        header_sent = False
+        if text or notes or (not media and not to_resolve):
+            body = self._topic_body(sender, text, notes)
+            first_msg_id = await asyncio.to_thread(
+                tg.send_message, self._token, self._forum_chat_id, body,
+                message_thread_id=thread_id,
+            )
+            self._remember(
+                first_msg_id, chat_id, message_id, sender,
+                self._forum_chat_id, thread_id,
+            )
+            header_sent = True
+
+        ctx = (
+            client, f"MAX | {sender} (chat {chat_id})", chat_id, message_id, sender,
+            self._forum_chat_id, thread_id, True,
+        )
+        for item in media:
+            header_sent = await self._send_media_item(item, header_sent, ctx)
+        for item in to_resolve:
+            header_sent = await self._send_resolved_item(item, header_sent, ctx)
+
+        self._state.mark_seeded_message(
+            chat_id,
+            max_message_id=message_id,
+            telegram_message_id=first_msg_id,
+        )
+        return True
 
     # --- MAX -> Telegram -----------------------------------------------------
 
@@ -140,31 +440,41 @@ class MaxToTelegramBridge:
 
             sender = (await self._resolve_sender_name(client, sender_id)
                       if isinstance(sender_id, int) else "неизвестный отправитель")
+            chat_title, chat_type = self._extract_chat_meta(payload, sender)
             header = f"MAX | {sender} (чат {chat_id})"
 
             await self._forward(client, header, text, parsed,
-                                chat_id, max_message_id, sender)
+                                chat_id, max_message_id, sender,
+                                chat_title, chat_type)
             _logger.info("Forwarded from %s (chat %s, %d attach)",
                          sender, chat_id, len(parsed))
         except Exception:
             _logger.exception("Failed to handle packet: %s", packet)
 
     async def _forward(self, client, header, text, parsed,
-                       chat_id, max_message_id, sender):
+                       chat_id, max_message_id, sender, chat_title, chat_type):
         resolvable = {"file_resolve", "video_resolve"}
         media = [p for p in parsed if p.kind in _MEDIA_SENDERS]
         to_resolve = [p for p in parsed if p.kind in resolvable]
         notes = [p.text for p in parsed
                  if p.kind not in _MEDIA_SENDERS and p.kind not in resolvable]
+        telegram_chat_id, thread_id, in_topic = await self._telegram_target(
+            chat_id, chat_title, chat_type, sender
+        )
 
-        ctx = (client, header, chat_id, max_message_id, sender)
+        ctx = (client, header, chat_id, max_message_id, sender,
+               telegram_chat_id, thread_id, in_topic)
         header_sent = False
         # A leading text message when there is text, notes, or nothing else.
         if text or notes or (not media and not to_resolve):
-            body = "\n".join(part for part in [header, text, *notes] if part) or header
+            body = (self._topic_body(sender, text, notes)
+                    if in_topic else
+                    ("\n".join(part for part in [header, text, *notes] if part) or header))
             msg_id = await asyncio.to_thread(tg.send_message, self._token,
-                                             self._chat_id, body)
-            self._remember(msg_id, chat_id, max_message_id, sender)
+                                             telegram_chat_id, body,
+                                             message_thread_id=thread_id)
+            self._remember(msg_id, chat_id, max_message_id, sender,
+                           telegram_chat_id, thread_id)
             header_sent = True
 
         for item in media:
@@ -177,71 +487,235 @@ class MaxToTelegramBridge:
         return item_text if header_sent else f"{header}\n{item_text}"
 
     async def _send_media_item(self, item, header_sent, ctx) -> bool:
-        _client, header, chat_id, max_message_id, sender = ctx
-        caption = self._caption(header, header_sent, item.text)
+        _client, header, chat_id, max_message_id, sender, telegram_chat_id, thread_id, in_topic = ctx
+        caption = (item.text if header_sent else f"{sender}:\n{item.text}"
+                   if in_topic else self._caption(header, header_sent, item.text))
         sender_fn, supports_caption = _MEDIA_SENDERS[item.kind]
         try:
             if supports_caption:
                 msg_id = await asyncio.to_thread(
-                    sender_fn, self._token, self._chat_id, item.url, caption)
+                    sender_fn, self._token, telegram_chat_id, item.url, caption,
+                    message_thread_id=thread_id)
             else:
                 msg_id = await asyncio.to_thread(
-                    sender_fn, self._token, self._chat_id, item.url)
+                    sender_fn, self._token, telegram_chat_id, item.url,
+                    message_thread_id=thread_id)
         except Exception as exc:
             _logger.warning("Failed to send %s: %s", item.kind, exc)
             msg_id = await asyncio.to_thread(
-                tg.send_message, self._token, self._chat_id,
-                f"{caption} [не удалось переслать медиа]")
-        self._remember(msg_id, chat_id, max_message_id, sender)
+                tg.send_message, self._token, telegram_chat_id,
+                f"{caption} [не удалось переслать медиа]",
+                message_thread_id=thread_id)
+        self._remember(msg_id, chat_id, max_message_id, sender,
+                       telegram_chat_id, thread_id)
         return True
 
     async def _send_resolved_item(self, item, header_sent, ctx) -> bool:
         """Resolve a file/video to a temporary URL, then upload it to Telegram."""
-        client, header, chat_id, max_message_id, sender = ctx
-        caption = self._caption(header, header_sent, item.text)
+        client, header, chat_id, max_message_id, sender, telegram_chat_id, thread_id, in_topic = ctx
+        caption = (item.text if header_sent else f"{sender}:\n{item.text}"
+                   if in_topic else self._caption(header, header_sent, item.text))
         if item.size and item.size > TELEGRAM_UPLOAD_LIMIT:
             msg_id = await asyncio.to_thread(
-                tg.send_message, self._token, self._chat_id,
-                f"{caption} [слишком большой для Telegram] — открыть в MAX")
-            self._remember(msg_id, chat_id, max_message_id, sender)
+                tg.send_message, self._token, telegram_chat_id,
+                f"{caption} [слишком большой для Telegram] — открыть в MAX",
+                message_thread_id=thread_id)
+            self._remember(msg_id, chat_id, max_message_id, sender,
+                           telegram_chat_id, thread_id)
             return True
         try:
             if item.kind == "file_resolve":
                 url = await mediamax.resolve_file_url(
                     client, item.file_id, chat_id, max_message_id)
                 msg_id = await asyncio.to_thread(
-                    tg.send_document, self._token, self._chat_id, url,
-                    caption, item.filename)
+                    tg.send_document, self._token, telegram_chat_id, url,
+                    caption, item.filename, message_thread_id=thread_id)
             else:  # video_resolve
                 url = await mediamax.resolve_video_url(
                     client, item.video_id, chat_id, max_message_id)
                 msg_id = await asyncio.to_thread(
-                    tg.send_video, self._token, self._chat_id, url, caption)
+                    tg.send_video, self._token, telegram_chat_id, url, caption,
+                    message_thread_id=thread_id)
         except Exception as exc:
             _logger.warning("Failed to resolve/send %s: %s", item.kind, exc)
             msg_id = await asyncio.to_thread(
-                tg.send_message, self._token, self._chat_id,
-                f"{caption} — открыть в MAX")
-        self._remember(msg_id, chat_id, max_message_id, sender)
+                tg.send_message, self._token, telegram_chat_id,
+                f"{caption} — открыть в MAX", message_thread_id=thread_id)
+        self._remember(msg_id, chat_id, max_message_id, sender,
+                       telegram_chat_id, thread_id)
         return True
 
     # --- Telegram -> MAX -----------------------------------------------------
 
     async def _send_reply_to_max(self, target: dict, text: str) -> None:
+        telegram_chat_id = target.get("telegram_chat_id") or self._fallback_chat_id
+        thread_id = target.get("message_thread_id")
         if self._client is None:
             await asyncio.to_thread(
-                tg.send_message, self._token, self._chat_id,
-                "⚠️ MAX сейчас не подключён, ответ не отправлен. Повторите позже.")
+                tg.send_message, self._token, telegram_chat_id,
+                "⚠️ MAX сейчас не подключён, ответ не отправлен. Повторите позже.",
+                message_thread_id=thread_id)
             return
         chat_id = target["chat_id"]
         message_id = target.get("message_id")
-        if message_id is not None:
-            await max_reply(self._client, chat_id, text, message_id)
-        else:
-            await max_send(self._client, chat_id, text)
+        try:
+            if message_id is not None:
+                await max_reply(self._client, chat_id, text, message_id)
+            else:
+                await max_send(self._client, chat_id, text)
+        except Exception as exc:
+            _logger.warning("Could not send Telegram reply to MAX chat %s: %s",
+                            chat_id, exc)
+            await asyncio.to_thread(
+                tg.send_message, self._token, telegram_chat_id,
+                f"Не удалось отправить в MAX: {exc}",
+                message_thread_id=thread_id)
+            return
         await asyncio.to_thread(
-            tg.send_message, self._token, self._chat_id,
-            f"✅ Отправлено в MAX → {target.get('sender', 'чат')}")
+            tg.send_message, self._token, telegram_chat_id,
+            f"✅ Отправлено в MAX → {target.get('sender', 'чат')}",
+            message_thread_id=thread_id)
+
+    @staticmethod
+    def _telegram_media_note(message: dict) -> str | None:
+        if message.get("sticker"):
+            sticker = message["sticker"]
+            emoji = sticker.get("emoji") or ""
+            return f"[Telegram sticker {emoji}]".strip()
+        if message.get("document"):
+            document = message["document"]
+            name = document.get("file_name") or "file"
+            return f"[Telegram file: {name}]"
+        if message.get("photo"):
+            return "[Telegram photo]"
+        if message.get("video"):
+            video = message["video"]
+            name = video.get("file_name") or "video"
+            return f"[Telegram video: {name}]"
+        if message.get("animation"):
+            animation = message["animation"]
+            name = animation.get("file_name") or "animation"
+            return f"[Telegram animation: {name}]"
+        if message.get("voice"):
+            return "[Telegram voice message]"
+        if message.get("audio"):
+            audio = message["audio"]
+            name = audio.get("file_name") or audio.get("title") or "audio"
+            return f"[Telegram audio: {name}]"
+        if message.get("video_note"):
+            return "[Telegram video note]"
+        return None
+
+    @staticmethod
+    def _telegram_attachment(message: dict) -> dict | None:
+        if message.get("sticker"):
+            sticker = message["sticker"]
+            if sticker.get("is_animated"):
+                ext, mime_type = "tgs", "application/x-tgsticker"
+            elif sticker.get("is_video"):
+                ext, mime_type = "webm", "video/webm"
+            else:
+                ext, mime_type = "webp", "image/webp"
+            unique = sticker.get("file_unique_id") or sticker.get("file_id") or "sticker"
+            return {
+                "file_id": sticker.get("file_id"),
+                "filename": f"telegram-sticker-{unique}.{ext}",
+                "mime_type": mime_type,
+                "kind": "file",
+            }
+        if message.get("document"):
+            document = message["document"]
+            return {
+                "file_id": document.get("file_id"),
+                "filename": document.get("file_name") or "telegram-file",
+                "mime_type": document.get("mime_type") or "application/octet-stream",
+                "kind": "file",
+            }
+        if message.get("photo"):
+            photo = message["photo"][-1]
+            return {
+                "file_id": photo.get("file_id"),
+                "filename": "telegram-photo.jpg",
+                "mime_type": "image/jpeg",
+                "kind": "photo",
+            }
+        for key, fallback_name, fallback_mime, kind in (
+            ("animation", "telegram-animation.mp4", "video/mp4", "video"),
+            ("video", "telegram-video.mp4", "video/mp4", "video"),
+            ("voice", "telegram-voice.ogg", "audio/ogg", "file"),
+            ("audio", "telegram-audio.mp3", "audio/mpeg", "file"),
+            ("video_note", "telegram-video-note.mp4", "video/mp4", "video"),
+        ):
+            item = message.get(key)
+            if item:
+                return {
+                    "file_id": item.get("file_id"),
+                    "filename": item.get("file_name") or fallback_name,
+                    "mime_type": item.get("mime_type") or fallback_mime,
+                    "kind": kind,
+                }
+        return None
+
+    @classmethod
+    def _telegram_outgoing_text(cls, message: dict) -> str:
+        text = (message.get("text") or message.get("caption") or "").strip()
+        media_note = cls._telegram_media_note(message)
+        if media_note and text:
+            return f"{text}\n\n{media_note}"
+        return text or media_note or ""
+
+    async def _send_telegram_update_to_max(self, target: dict, message: dict) -> None:
+        attachment = self._telegram_attachment(message)
+        caption = (message.get("caption") or "").strip()
+        if attachment and attachment.get("file_id"):
+            telegram_chat_id = target.get("telegram_chat_id") or self._fallback_chat_id
+            thread_id = target.get("message_thread_id")
+            if self._client is None:
+                await self._send_reply_to_max(target, self._telegram_outgoing_text(message))
+                return
+            try:
+                content, _file_path = await asyncio.to_thread(
+                    tg.download_file_by_id,
+                    self._token,
+                    attachment["file_id"],
+                )
+                await mediamax.send_uploaded_media(
+                    self._client,
+                    target["chat_id"],
+                    content,
+                    attachment["filename"],
+                    attachment["mime_type"],
+                    kind=attachment.get("kind", "file"),
+                    text=caption,
+                    reply_to_message_id=target.get("message_id"),
+                )
+                await asyncio.to_thread(
+                    tg.send_message,
+                    self._token,
+                    telegram_chat_id,
+                    f"✅ Файл отправлен в MAX → {target.get('sender', 'чат')}",
+                    message_thread_id=thread_id,
+                )
+                return
+            except Exception as exc:
+                _logger.warning("Could not upload Telegram media to MAX chat %s: %s",
+                                target.get("chat_id"), exc)
+                fallback_text = self._telegram_outgoing_text(message)
+                if fallback_text:
+                    await self._send_reply_to_max(target, fallback_text)
+                else:
+                    await asyncio.to_thread(
+                        tg.send_message,
+                        self._token,
+                        telegram_chat_id,
+                        f"Не удалось отправить файл в MAX: {exc}",
+                        message_thread_id=thread_id,
+                    )
+                return
+
+        text = self._telegram_outgoing_text(message)
+        if text:
+            await self._send_reply_to_max(target, text)
 
     async def _handle_update(self, update: dict) -> None:
         message = update.get("message")
@@ -250,18 +724,32 @@ class MaxToTelegramBridge:
         # Only accept commands from the configured owner chat (tolerate the id
         # being stored/sent as int vs str).
         incoming_chat = message.get("chat", {}).get("id")
-        if str(incoming_chat) != str(self._chat_id):
+        allowed_chats = {str(self._chat_id), str(self._fallback_chat_id)}
+        if self._forum_chat_id:
+            allowed_chats.add(str(self._forum_chat_id))
+        if str(incoming_chat) not in allowed_chats:
             return
-        text = message.get("text")
-        if not text:
+        text = self._telegram_outgoing_text(message)
+        if not text or text.startswith("/"):
             return
         reply = message.get("reply_to_message")
         target = self._reply_map.get(reply.get("message_id")) if reply else None
         if target:
-            await self._send_reply_to_max(target, text)
+            await self._send_telegram_update_to_max(target, message)
+        elif self._forum_chat_id and str(incoming_chat) == str(self._forum_chat_id):
+            thread_id = message.get("message_thread_id")
+            topic = self._state.find_by_thread(thread_id) if thread_id else None
+            if topic:
+                await self._send_telegram_update_to_max({
+                    "chat_id": topic["max_chat_id"],
+                    "message_id": None,
+                    "sender": topic.get("title") or "чат",
+                    "telegram_chat_id": self._forum_chat_id,
+                    "message_thread_id": thread_id,
+                }, message)
         else:
             await asyncio.to_thread(
-                tg.send_message, self._token, self._chat_id,
+                tg.send_message, self._token, incoming_chat,
                 "ℹ️ Чтобы ответить в MAX, сделайте «Ответить» (Reply / свайп) "
                 "на пересланном сообщении и напишите текст.")
 
@@ -294,12 +782,24 @@ class MaxToTelegramBridge:
         client = BrowserMaxClient()
         await client.connect()
         try:
-            login_response = await client.login_by_token(self._config["max_login_token"])
+            preload_topics = bool(
+                self._topics_enabled and self._config.get("telegram_preload_topics")
+            )
+            login_response = await client.login_by_token(
+                self._config["max_login_token"],
+                chats_sync=1 if preload_topics else 0,
+                contacts_sync=1 if preload_topics else 0,
+                chats_count=int(self._config.get("telegram_preload_chat_count") or 100),
+            )
             self._own_id = _extract_own_id(login_response)
             self._client = client
+            await self._preload_topics_from_login(client, login_response)
             await client.set_callback(self._on_packet)
             _logger.info("Bridge online (own id: %s).", self._own_id)
-            print("Мост запущен. Сообщения MAX идут в Telegram; ответы — через Reply.")
+            if self._topics_enabled:
+                print("Мост запущен. Сообщения MAX идут в темы Telegram; ответы — в теме или через Reply.")
+            else:
+                print("Мост запущен. Сообщения MAX идут в Telegram; ответы — через Reply.")
             await client._connection.wait_closed()
             _logger.warning("MAX connection closed by server.")
         finally:

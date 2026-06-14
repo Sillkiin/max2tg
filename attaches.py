@@ -36,6 +36,16 @@ def _to_int(value) -> int | None:
     return None
 
 
+def _format_duration(value) -> str:
+    """Format a voice/audio duration (MAX gives milliseconds) as ' (N с)'."""
+    seconds = _to_int(value)
+    if not seconds:
+        return ""
+    if seconds > 1000:  # milliseconds
+        seconds = round(seconds / 1000)
+    return f" ({seconds} с)"
+
+
 def _human_size(size) -> str:
     try:
         size = float(size)
@@ -90,13 +100,18 @@ def _parse_one(attach: dict) -> ParsedAttach | None:
             return ParsedAttach("video_resolve", "🎞 Видео", video_id=video_id)
         return ParsedAttach("note", "🎞 Видео — открыть в MAX")
 
-    if kind == "AUDIO":
+    # MAX marks voice messages as "UNSUPPORTED" but still ships an audioId +
+    # duration, so detect them by audioId regardless of the declared type.
+    if kind == "AUDIO" or attach.get("audioId") is not None:
         url = _first_url(attach, "url")
-        duration = attach.get("duration")
-        suffix = f" ({duration} c)" if duration else ""
+        suffix = _format_duration(attach.get("duration"))
+        label = f"🎤 Голосовое{suffix}"
         if url:
-            return ParsedAttach("voice", f"🎤 Голосовое{suffix}", url)
-        return ParsedAttach("note", f"🎤 Голосовое сообщение{suffix} — открыть в MAX")
+            return ParsedAttach("voice", label, url)
+        # MAX marks mobile voices as UNSUPPORTED with no url and no resolvable
+        # source (the file opcode returns file.not.found), so we can only label
+        # them — the web API itself can't play these.
+        return ParsedAttach("note", f"{label} — открыть в MAX")
 
     if kind == "FILE":
         url = _first_url(attach, "url")

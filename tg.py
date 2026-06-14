@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 API_BASE = "https://api.telegram.org/bot{token}/{method}"
+FILE_API_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
 # (connect, read) timeouts so a stalled peer can't hang a worker thread forever.
 REQUEST_TIMEOUT = (5, 30)
 UPLOAD_TIMEOUT = (5, 120)
@@ -113,8 +114,50 @@ def get_updates(token: str, offset: int | None = None, timeout: int = 25) -> lis
     return _call(token, "getUpdates", **params)
 
 
+def get_file(token: str, file_id: str) -> dict:
+    return _call(token, "getFile", file_id=file_id)
+
+
+def download_file_by_id(token: str, file_id: str) -> tuple[bytes, str]:
+    result = get_file(token, file_id)
+    file_size = int(result.get("file_size") or 0)
+    if file_size > DOWNLOAD_SIZE_LIMIT:
+        raise ValueError(f"Telegram file too large: {file_size} bytes")
+    file_path = result.get("file_path")
+    if not file_path:
+        raise ValueError("Telegram getFile returned no file_path")
+    url = FILE_API_BASE.format(token=token, file_path=file_path)
+    with requests.get(url, timeout=UPLOAD_TIMEOUT, stream=True) as response:
+        response.raise_for_status()
+        chunks, received = [], 0
+        for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK):
+            received += len(chunk)
+            if received > DOWNLOAD_SIZE_LIMIT:
+                raise ValueError("Telegram file exceeded size limit during download")
+            chunks.append(chunk)
+    return b"".join(chunks), file_path
+
+
+def create_forum_topic(token: str, chat_id: int | str, name: str) -> int:
+    """Create a Telegram forum topic and return its message_thread_id."""
+    result = _call(token, "createForumTopic", chat_id=chat_id, name=name)
+    return result["message_thread_id"]
+
+
+def edit_forum_topic(token: str, chat_id: int | str, message_thread_id: int,
+                     name: str) -> None:
+    _call(
+        token,
+        "editForumTopic",
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        name=name,
+    )
+
+
 def send_message(token: str, chat_id: int | str, text: str,
-                 reply_to_message_id: int | None = None) -> int | None:
+                 reply_to_message_id: int | None = None,
+                 message_thread_id: int | None = None) -> int | None:
     """Send plain text, splitting over Telegram's length limit.
 
     Returns the message_id of the first chunk (used for reply mapping).
@@ -124,6 +167,8 @@ def send_message(token: str, chat_id: int | str, text: str,
         chunk = text[start:start + MAX_MESSAGE_LEN]
         params = {"chat_id": chat_id, "text": chunk,
                   "disable_web_page_preview": True}
+        if message_thread_id:
+            params["message_thread_id"] = message_thread_id
         if reply_to_message_id and first_id is None:
             params["reply_to_message_id"] = reply_to_message_id
         result = _call(token, "sendMessage", **params)
@@ -133,11 +178,14 @@ def send_message(token: str, chat_id: int | str, text: str,
 
 
 def _send_media(token: str, method: str, field: str, chat_id: int | str,
-                url: str, caption: str | None, filename: str | None) -> int | None:
+                url: str, caption: str | None, filename: str | None,
+                message_thread_id: int | None = None) -> int | None:
     """Send media by URL, falling back to download + multipart upload."""
     caption = (caption or "")[:MAX_CAPTION_LEN] or None
     try:
         params = {"chat_id": chat_id, field: url}
+        if message_thread_id:
+            params["message_thread_id"] = message_thread_id
         if caption:
             params["caption"] = caption
         result = _call(token, method, **params)
@@ -147,6 +195,8 @@ def _send_media(token: str, method: str, field: str, chat_id: int | str,
                      method, exc)
     content = _download(url)
     params = {"chat_id": chat_id}
+    if message_thread_id:
+        params["message_thread_id"] = message_thread_id
     if caption:
         params["caption"] = caption
     files = {field: (filename or "file", content)}
@@ -154,37 +204,52 @@ def _send_media(token: str, method: str, field: str, chat_id: int | str,
     return result.get("message_id")
 
 
-def send_photo(token, chat_id, url, caption=None) -> int | None:
-    return _send_media(token, "sendPhoto", "photo", chat_id, url, caption, "photo.jpg")
+def send_photo(token, chat_id, url, caption=None,
+               message_thread_id: int | None = None) -> int | None:
+    return _send_media(token, "sendPhoto", "photo", chat_id, url, caption,
+                       "photo.jpg", message_thread_id)
 
 
-def send_animation(token, chat_id, url, caption=None) -> int | None:
+def send_animation(token, chat_id, url, caption=None,
+                   message_thread_id: int | None = None) -> int | None:
     return _send_media(token, "sendAnimation", "animation", chat_id, url,
-                       caption, "animation.mp4")
+                       caption, "animation.mp4", message_thread_id)
 
 
-def send_video(token, chat_id, url, caption=None) -> int | None:
-    return _send_media(token, "sendVideo", "video", chat_id, url, caption, "video.mp4")
+def send_video(token, chat_id, url, caption=None,
+               message_thread_id: int | None = None) -> int | None:
+    return _send_media(token, "sendVideo", "video", chat_id, url, caption,
+                       "video.mp4", message_thread_id)
 
 
-def send_voice(token, chat_id, url, caption=None) -> int | None:
-    return _send_media(token, "sendVoice", "voice", chat_id, url, caption, "voice.ogg")
+def send_voice(token, chat_id, url, caption=None,
+               message_thread_id: int | None = None) -> int | None:
+    return _send_media(token, "sendVoice", "voice", chat_id, url, caption,
+                       "voice.ogg", message_thread_id)
 
 
-def send_audio(token, chat_id, url, caption=None) -> int | None:
-    return _send_media(token, "sendAudio", "audio", chat_id, url, caption, "audio.mp3")
+def send_audio(token, chat_id, url, caption=None,
+               message_thread_id: int | None = None) -> int | None:
+    return _send_media(token, "sendAudio", "audio", chat_id, url, caption,
+                       "audio.mp3", message_thread_id)
 
 
-def send_document(token, chat_id, url, caption=None, filename=None) -> int | None:
+def send_document(token, chat_id, url, caption=None, filename=None,
+                  message_thread_id: int | None = None) -> int | None:
     return _send_media(token, "sendDocument", "document", chat_id, url,
-                       caption, filename or "file")
+                       caption, filename or "file", message_thread_id)
 
 
-def send_sticker(token, chat_id, url) -> int | None:
+def send_sticker(token, chat_id, url,
+                 message_thread_id: int | None = None) -> int | None:
     """Stickers have no caption in Telegram; fall back to document on failure."""
     try:
-        result = _call(token, "sendSticker", chat_id=chat_id, sticker=url)
+        params = {"chat_id": chat_id, "sticker": url}
+        if message_thread_id:
+            params["message_thread_id"] = message_thread_id
+        result = _call(token, "sendSticker", **params)
         return result.get("message_id")
     except Exception as exc:
         _logger.info("sendSticker failed, sending as document: %s", exc)
-        return send_document(token, chat_id, url, filename="sticker.webp")
+        return send_document(token, chat_id, url, filename="sticker.webp",
+                             message_thread_id=message_thread_id)

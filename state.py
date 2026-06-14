@@ -1,0 +1,99 @@
+"""Persistent local state for Telegram forum topics."""
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Any
+
+STATE_PATH = Path(__file__).parent / "state.json"
+
+_logger = logging.getLogger(__name__)
+
+
+class BridgeState:
+    """Stores MAX chat -> Telegram topic mappings on disk."""
+
+    def __init__(self, path: Path = STATE_PATH):
+        self.path = path
+        self._data: dict[str, Any] = {"topics": {}}
+        self.load()
+
+    def load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            _logger.warning("Could not load state.json: %s", exc)
+            return
+        if isinstance(data, dict) and isinstance(data.get("topics"), dict):
+            self._data = data
+
+    def save(self) -> None:
+        tmp = self.path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(self._data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(self.path)
+
+    def get_topic(self, max_chat_id: int | str) -> dict[str, Any] | None:
+        topic = self._data["topics"].get(str(max_chat_id))
+        return topic if isinstance(topic, dict) else None
+
+    def save_topic(
+        self,
+        max_chat_id: int | str,
+        *,
+        thread_id: int,
+        title: str,
+        chat_type: str,
+        sender: str | None = None,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        existing = self.get_topic(max_chat_id) or {}
+        topic = {
+            **existing,
+            "max_chat_id": max_chat_id,
+            "telegram_thread_id": thread_id,
+            "title": title,
+            "chat_type": chat_type,
+            "last_sender": sender,
+            "updated_at": now,
+        }
+        if "created_at" not in topic:
+            topic["created_at"] = now
+        self._data["topics"][str(max_chat_id)] = topic
+        self.save()
+        return topic
+
+    def mark_seeded_message(
+        self,
+        max_chat_id: int | str,
+        *,
+        max_message_id: int | str,
+        telegram_message_id: int | None = None,
+    ) -> None:
+        topic = self.get_topic(max_chat_id)
+        if not topic:
+            return
+        topic["last_seeded_max_message_id"] = str(max_message_id)
+        if telegram_message_id:
+            topic["last_seeded_telegram_message_id"] = telegram_message_id
+        topic["updated_at"] = int(time.time())
+        self._data["topics"][str(max_chat_id)] = topic
+        self.save()
+
+    def find_by_thread(self, thread_id: int) -> dict[str, Any] | None:
+        for topic in self._data["topics"].values():
+            if isinstance(topic, dict) and topic.get("telegram_thread_id") == thread_id:
+                return topic
+        return None
+
+
+def normalize_topic_title(value: str, fallback: str) -> str:
+    title = " ".join((value or "").split()) or fallback
+    # Telegram forum topic names are limited to 128 chars. Keep room for suffixes.
+    return title[:120]
