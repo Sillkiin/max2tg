@@ -1,5 +1,7 @@
 # MAX → Telegram 🚀
 
+> 🇬🇧 *Mirror your MAX (max.ru) messenger into Telegram — read & reply from Telegram. Two-way, media, per-chat topics. Free & self-hosted.* → [In English](#-in-english)
+
 **Читайте и отвечайте на сообщения мессенджера MAX (max.ru) прямо в Telegram.**
 
 `max2tg` — личный мост, который зеркалит ваш аккаунт **MAX** в **Telegram**:
@@ -33,6 +35,32 @@
 | **MAX → Telegram** | текст, фото, видео, файлы, стикеры, пометки о голосовых |
 | **Telegram → MAX** | текст (ответом), а также фото / видео / файлы |
 | **Темы** | каждый MAX-чат = тема Telegram-форума с именем собеседника |
+
+---
+
+## 🇬🇧 In English
+
+**max2tg** mirrors your personal **MAX** (max.ru) messenger account into
+**Telegram** and lets you reply from there — handy if you'd rather not keep yet
+another app (especially on **iOS**).
+
+- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers —
+  are forwarded to Telegram; reply right from Telegram and it lands in the MAX
+  chat.
+- **Topics.** Each MAX chat becomes its own Telegram forum topic, named after
+  the contact.
+- **Private & free.** Tokens and messages stay on your machine — nothing goes to
+  third-party servers. Open-source (MIT).
+- **Runs anywhere.** Windows, old Android (Termux), or a 24/7 server (Docker /
+  systemd — see [DEPLOY.md](DEPLOY.md)).
+
+**Quick start:** run `run.bat`, create a bot via [@BotFather](https://t.me/BotFather),
+and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console:
+`copy(JSON.parse(localStorage.__oneme_auth).token)`).
+
+> ⚠️ Uses MAX's **unofficial** web API (no official personal API exists). Voice
+> messages from MAX are only labeled — MAX's own web client can't play them
+> either. Use at your own risk.
 
 ---
 
