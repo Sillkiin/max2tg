@@ -118,6 +118,12 @@ class MaxToTelegramBridge:
         self._state = BridgeState()
         # telegram message_id -> {"chat_id", "message_id", "sender"}
         self._reply_map: "OrderedDict[int, dict]" = OrderedDict()
+        # Per-MAX-chat locks serialize topic creation so two concurrent packets
+        # from a brand-new chat cannot create duplicate Telegram topics.
+        self._topic_locks: "dict[str, asyncio.Lock]" = {}
+        # Strong refs to in-flight per-packet handler tasks: vkmax spawns them
+        # fire-and-forget, and without a reference they can be GC'd mid-run.
+        self._handler_tasks: set = set()
 
     # --- helpers -------------------------------------------------------------
 
@@ -316,42 +322,65 @@ class MaxToTelegramBridge:
             created, existing, seeded, failed, skipped,
         )
 
+    def _topic_lock(self, max_chat_id) -> asyncio.Lock:
+        # No await between the get and the set, so this is atomic on the loop.
+        key = str(max_chat_id)
+        lock = self._topic_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._topic_locks[key] = lock
+        return lock
+
+    def _existing_topic_target(self, max_chat_id, title, chat_type, sender):
+        existing = self._state.get_topic(max_chat_id)
+        if not (existing and existing.get("telegram_thread_id")):
+            return None
+        self._state.save_topic(
+            max_chat_id,
+            thread_id=existing["telegram_thread_id"],
+            title=existing.get("title") or title,
+            chat_type=existing.get("chat_type") or chat_type,
+            sender=sender,
+        )
+        return (self._forum_chat_id, existing["telegram_thread_id"], True)
+
     async def _telegram_target(self, max_chat_id, title: str, chat_type: str,
                                sender: str) -> tuple[int | str, int | None, bool]:
         if not self._topics_enabled:
             return self._fallback_chat_id, None, False
 
-        existing = self._state.get_topic(max_chat_id)
-        if existing and existing.get("telegram_thread_id"):
+        target = self._existing_topic_target(max_chat_id, title, chat_type, sender)
+        if target is not None:
+            return target
+
+        # Serialize creation per chat: concurrent packets from a brand-new chat
+        # must not both call createForumTopic (would make duplicate topics).
+        async with self._topic_lock(max_chat_id):
+            # Re-check under the lock — another task may have just created it.
+            target = self._existing_topic_target(max_chat_id, title, chat_type, sender)
+            if target is not None:
+                return target
+
+            topic_title = normalize_topic_title(title, f"MAX чат {max_chat_id}")
+            try:
+                thread_id = await asyncio.to_thread(
+                    tg.create_forum_topic, self._token, self._forum_chat_id, topic_title
+                )
+            except Exception as exc:
+                _logger.warning("Could not create Telegram topic for MAX chat %s: %s",
+                                max_chat_id, exc)
+                return self._fallback_chat_id, None, False
+
             self._state.save_topic(
                 max_chat_id,
-                thread_id=existing["telegram_thread_id"],
-                title=existing.get("title") or title,
-                chat_type=existing.get("chat_type") or chat_type,
+                thread_id=thread_id,
+                title=topic_title,
+                chat_type=chat_type,
                 sender=sender,
             )
-            return self._forum_chat_id, existing["telegram_thread_id"], True
-
-        topic_title = normalize_topic_title(title, f"MAX чат {max_chat_id}")
-        try:
-            thread_id = await asyncio.to_thread(
-                tg.create_forum_topic, self._token, self._forum_chat_id, topic_title
-            )
-        except Exception as exc:
-            _logger.warning("Could not create Telegram topic for MAX chat %s: %s",
-                            max_chat_id, exc)
-            return self._fallback_chat_id, None, False
-
-        self._state.save_topic(
-            max_chat_id,
-            thread_id=thread_id,
-            title=topic_title,
-            chat_type=chat_type,
-            sender=sender,
-        )
-        _logger.info("Created Telegram topic %s for MAX chat %s (%s)",
-                     thread_id, max_chat_id, topic_title)
-        return self._forum_chat_id, thread_id, True
+            _logger.info("Created Telegram topic %s for MAX chat %s (%s)",
+                         thread_id, max_chat_id, topic_title)
+            return self._forum_chat_id, thread_id, True
 
     @staticmethod
     def _topic_body(sender: str, text: str, notes: list[str]) -> str:
@@ -425,6 +454,12 @@ class MaxToTelegramBridge:
     # --- MAX -> Telegram -----------------------------------------------------
 
     async def _on_packet(self, client: MaxClient, packet: dict) -> None:
+        # vkmax spawns this as a bare fire-and-forget task; hold a strong ref so
+        # the event loop can't garbage-collect it mid-forward.
+        task = asyncio.current_task()
+        if task is not None:
+            self._handler_tasks.add(task)
+            task.add_done_callback(self._handler_tasks.discard)
         try:
             if packet.get("opcode") != INCOMING_MESSAGE_OPCODE:
                 return

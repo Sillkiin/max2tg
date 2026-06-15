@@ -23,6 +23,10 @@ _logger = logging.getLogger(__name__)
 # "socks5://user:pass@host:1080" or "http://host:3128".
 WS_PROXY = os.environ.get("MAX2TG_WS_PROXY") or None
 
+# A dropped MAX response must not park an awaiting caller forever (vkmax's
+# invoke_method has no timeout). The keepalive opcode is exempt — see below.
+MAX_INVOKE_TIMEOUT = 60
+
 # Keep in sync with the MAX web client; bump if phone auth starts failing.
 APP_VERSION = "26.2.2"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -128,6 +132,26 @@ class BrowserMaxClient(MaxClient):
         _logger.info("Logged in by token.")
         return response
 
+    async def invoke_method(self, opcode: int, payload: dict):
+        coro = super().invoke_method(opcode, payload)
+        if opcode == 1:
+            # Keepalive ping: don't time it out (a slow ping shouldn't kill the
+            # keepalive loop); a hung one is cleaned up by _fail_pending().
+            return await coro
+        return await asyncio.wait_for(coro, timeout=MAX_INVOKE_TIMEOUT)
+
+    def _fail_pending(self) -> None:
+        """Reject all in-flight request futures so awaiting callers unblock with
+        an exception instead of hanging forever once the socket is gone (the
+        recv loop that would resolve them is being torn down)."""
+        pending = getattr(self, "_pending", None)
+        if not pending:
+            return
+        for future in list(pending.values()):
+            if not future.done():
+                future.set_exception(ConnectionError("MAX connection closed"))
+        pending.clear()
+
     async def disconnect(self):
         # vkmax's disconnect() raises if keepalive never started (i.e. the
         # session was never logged in); tear down whatever actually exists
@@ -136,6 +160,7 @@ class BrowserMaxClient(MaxClient):
             self._keepalive_task = None
         if self._recv_task:
             self._recv_task.cancel()
+        self._fail_pending()
         if self._connection:
             await self._connection.close()
             self._connection = None
