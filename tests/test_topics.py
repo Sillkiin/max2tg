@@ -1,3 +1,5 @@
+import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,6 +125,46 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded["telegram_bot_token"], "token")
         self.assertFalse(loaded["telegram_confirm_sent"])
 
+    def test_env_tokens_do_not_discard_config_json_optional_settings(self):
+        # HIGH-fix: all 3 token env vars set must NOT wipe optional config.json
+        # settings (topics, forum id, confirm_sent).
+        import os
+
+        import config as config_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps({
+                "telegram_bot_token": "fromfile",
+                "telegram_chat_id": 111,
+                "max_login_token": "fromfile",
+                "telegram_topics_enabled": True,
+                "telegram_forum_chat_id": -100123,
+                "telegram_confirm_sent": False,
+            }), encoding="utf-8")
+            keys = ("MAX2TG_TELEGRAM_BOT_TOKEN", "MAX2TG_TELEGRAM_CHAT_ID",
+                    "MAX2TG_MAX_TOKEN")
+            saved = {k: os.environ.get(k) for k in keys}
+            os.environ.update({
+                "MAX2TG_TELEGRAM_BOT_TOKEN": "fromenv",
+                "MAX2TG_TELEGRAM_CHAT_ID": "222",
+                "MAX2TG_MAX_TOKEN": "fromenv",
+            })
+            try:
+                with patch.object(config_module, "CONFIG_PATH", path):
+                    loaded = config_module.load_config()
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+        self.assertEqual(loaded["telegram_bot_token"], "fromenv")  # env wins per-key
+        self.assertEqual(loaded["telegram_forum_chat_id"], -100123)  # survives
+        self.assertTrue(loaded["telegram_topics_enabled"])
+        self.assertFalse(loaded["telegram_confirm_sent"])
+
     def test_confirm_sent_defaults_to_true(self):
         config = normalize_config({
             "telegram_bot_token": "token",
@@ -156,6 +198,31 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(thread_id, 42)
             self.assertTrue(in_topic)
             self.assertEqual(bridge._state.get_topic(555)["title"], "Людмила")
+
+    async def test_concurrent_new_chat_creates_one_topic(self):
+        # HIGH-fix: two concurrent packets from the same brand-new chat must
+        # create exactly ONE Telegram topic, not duplicate it.
+        bridge = self.make_bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            created = []
+
+            async def slow_create(func, *args):
+                # asyncio.to_thread passes the target callable first; yield so
+                # the second coroutine reaches the lock while we're "creating"
+                # (under the bug both would create a topic).
+                await asyncio.sleep(0)
+                created.append(args)
+                return 100 + len(created)
+
+            with patch("bridge.asyncio.to_thread", side_effect=slow_create):
+                results = await asyncio.gather(
+                    bridge._telegram_target(555, "X", "dialog", "X"),
+                    bridge._telegram_target(555, "X", "dialog", "X"),
+                )
+
+            self.assertEqual(len(created), 1)  # exactly one topic created
+            self.assertEqual(results[0][1], results[1][1])  # same thread id
 
     async def test_falls_back_when_topic_creation_fails(self):
         bridge = self.make_bridge()
@@ -333,6 +400,38 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 bridge._state.get_topic(100)["last_seeded_max_message_id"], "m2"
             )
+
+
+class RedactionTests(unittest.TestCase):
+    def test_bot_token_and_url_secret_are_scrubbed(self):
+        import logging
+
+        import main
+        rec = logging.LogRecord(
+            "x", logging.WARNING, "f.py", 1,
+            "poll error url: /bot123456789:AAEsecretTokenValue1234567/getUpdates"
+            "?sig=ABCDEFsecret123&x=1",
+            None, None)
+        main._RedactSecretsFilter().filter(rec)
+        out = rec.getMessage()
+        self.assertNotIn("AAEsecretTokenValue1234567", out)
+        self.assertNotIn("ABCDEFsecret123", out)
+        self.assertIn("bot<redacted>", out)
+
+
+class MaxClientPendingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fail_pending_unblocks_awaiters(self):
+        import asyncio
+
+        import max_client
+        client = max_client.BrowserMaxClient()
+        fut = asyncio.get_event_loop().create_future()
+        client._pending = {1: fut}
+        client._fail_pending()
+        self.assertTrue(fut.done())
+        with self.assertRaises(ConnectionError):
+            fut.result()
+        self.assertEqual(client._pending, {})
 
 
 if __name__ == "__main__":

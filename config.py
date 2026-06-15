@@ -130,22 +130,19 @@ def load_from_env() -> dict | None:
 
 
 def load_config() -> dict | None:
-    """Return a complete config from env vars or config.json, else None."""
-    from_env = load_from_env()
-    if from_env:
-        return from_env
-    if not CONFIG_PATH.exists():
+    """Return a complete config by layering MAX2TG_* env vars on top of
+    config.json, PER KEY.
+
+    This avoids the all-or-nothing trap where having the three token env vars
+    set would otherwise discard every optional setting (topics, confirm_sent,
+    ...) stored in config.json. Env-only deploys still work: when config.json is
+    absent the base is empty and the env vars supply everything.
+    """
+    base = load_partial()  # {} if config.json is missing or unreadable
+    merged = {**base, **_env_overrides()}
+    if not all(merged.get(k) for k in REQUIRED_KEYS):
         return None
-    try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not all(data.get(k) for k in REQUIRED_KEYS):
-        return None
-    # Let MAX2TG_* env vars override optional settings (e.g. confirm_sent,
-    # topics) even when the tokens themselves come from config.json.
-    data.update(_env_overrides())
-    return normalize_config(data)
+    return normalize_config(merged)
 
 
 def load_partial() -> dict:
