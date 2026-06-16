@@ -69,8 +69,15 @@ class BrowserMaxClient(MaxClient):
                 except (ValueError, TypeError):
                     _logger.warning("Skipping unparseable MAX frame")
                     continue
+                if not isinstance(packet, dict):
+                    # Valid JSON but not an object (array/scalar): it can be
+                    # neither a request reply nor an incoming event, so don't
+                    # dispatch it to a callback that assumes a dict.
+                    _logger.warning("Skipping non-object MAX frame (%s)",
+                                    type(packet).__name__)
+                    continue
                 try:
-                    seq = packet.get("seq") if isinstance(packet, dict) else None
+                    seq = packet.get("seq")
                     future = self._pending.pop(seq, None)
                     if future is not None:
                         if not future.done():

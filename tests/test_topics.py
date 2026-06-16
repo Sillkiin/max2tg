@@ -261,6 +261,14 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
                 await bridge._resolve_sender_name(object(), 1000 + i)
         self.assertLessEqual(len(bridge._name_cache), 3)
 
+    async def test_on_packet_ignores_non_dict_frame(self):
+        bridge = self.make_bridge()
+        client = object()
+        bridge._client = client
+        # A valid-JSON but non-dict frame must be ignored cleanly, not raise
+        # AttributeError out of the fire-and-forget handler task.
+        await bridge._on_packet(client, [1, 2, 3])  # must not raise
+
     async def test_falls_back_when_topic_creation_fails(self):
         bridge = self.make_bridge()
         with tempfile.TemporaryDirectory() as tmp:
@@ -493,10 +501,14 @@ class MaxClientPendingTests(unittest.IsolatedAsyncioTestCase):
         client._incoming_event_callback = callback
         client._connection = FakeConn([
             "not json at all",                       # unparseable -> skipped
+            "[1, 2, 3]",                             # valid JSON, non-dict -> skipped
+            "42",                                    # valid JSON scalar -> skipped
             '{"opcode": 128, "payload": {"x": 1}}',  # valid event (no seq)
         ])
         await client._recv_loop()
         await asyncio.sleep(0.01)  # let the dispatched task run
+        # Only the dict event is dispatched; non-dict frames never reach a
+        # callback that assumes a dict (would otherwise AttributeError).
         self.assertEqual(len(dispatched), 1)
         self.assertEqual(dispatched[0]["opcode"], 128)
 

@@ -475,6 +475,12 @@ class MaxToTelegramBridge:
         # so a stale handler can't act against a dead/new connection.
         if client is not self._client:
             return
+        # Guard before any .get(): a non-dict frame would raise AttributeError
+        # in this fire-and-forget task (an unretrieved-exception log), not the
+        # clean handling below. _recv_loop already filters these, but this keeps
+        # the handler robust to any caller.
+        if not isinstance(packet, dict):
+            return
         if packet.get("opcode") != INCOMING_MESSAGE_OPCODE:
             return
         if self._forward_sem is None:
