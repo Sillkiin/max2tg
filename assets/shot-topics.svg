@@ -31,8 +31,8 @@
 
     <!-- rows -->
     <g transform="translate(0,152)">
-      <circle cx="56" cy="42" r="26" fill="#ff7a8a"/><text x="56" y="50" text-anchor="middle" fill="#fff" font-size="22" font-weight="600">А</text>
-      <text x="94" y="36" fill="#ffffff" font-size="16.5" font-weight="600">Алина Чернова</text>
+      <circle cx="56" cy="42" r="26" fill="#ff7a8a"/><text x="56" y="50" text-anchor="middle" fill="#fff" font-size="22" font-weight="600">О</text>
+      <text x="94" y="36" fill="#ffffff" font-size="16.5" font-weight="600">Ольга Лебедева</text>
       <text x="94" y="58" fill="#7c8b9a" font-size="14.5">Привет! Освободилась — ты где? 😊</text>
       <text x="352" y="32" text-anchor="end" fill="#6c7883" font-size="13">9:41</text>
       <circle cx="345" cy="52" r="11" fill="#3390ec"/><text x="345" y="56.5" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">2</text>
