@@ -57,6 +57,29 @@ journalctl -u max2tg -f          # смотреть логи
 
 ---
 
+## Вариант B0 — Готовый Docker-образ из GHCR (проще всего, без исходников)
+
+CI собирает образ на каждый push в `main` и публикует его в GitHub Container
+Registry: **`ghcr.io/sillkiin/max2tg:latest`**. Исходники качать не нужно — на
+сервере достаточно двух файлов: `docker-compose.yml` и `.env`.
+
+```bash
+mkdir max2tg && cd max2tg
+# забрать только compose-файл и шаблон env (без клонирования репозитория)
+curl -O https://raw.githubusercontent.com/Sillkiin/max2tg/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/Sillkiin/max2tg/main/.env.example
+nano .env                          # три значения MAX2TG_* (свежий токен MAX!)
+docker compose up -d               # сам подтянет ghcr.io/sillkiin/max2tg:latest
+docker compose logs -f
+```
+Обновление на свежий образ позже: `docker compose pull && docker compose up -d`.
+Карта тем хранится на именованном томе `max2tg-data`, переживает обновления.
+
+> Хотите собирать из локального кода вместо готового образа — используйте
+> `docker compose -f docker-compose.build.yml up -d --build`.
+
+---
+
 ## Вариант B — Oracle Cloud Always Free (Docker) — выбранный
 
 Настоящая бесплатная VM 24/7 навсегда. Нужна карта при регистрации (без
@@ -78,8 +101,8 @@ ssh -i путь/к/ключу ubuntu@<IP_инстанса>
 mkdir max2tg && cd max2tg
 ```
 Перенесите файлы проекта на VM одним из способов:
-- **scp** с вашего ПК:
-  `scp -i ключ *.py requirements.txt Dockerfile docker-compose.yml server_setup.sh ubuntu@<IP>:~/max2tg/`
+- **scp** с вашего ПК (для сборки из исходников нужен `docker-compose.build.yml`):
+  `scp -i ключ *.py requirements.txt Dockerfile docker-compose.build.yml server_setup.sh ubuntu@<IP>:~/max2tg/`
 - либо `git clone` приватного репозитория (`.env`/`config.json` в .gitignore — не утекут).
 
 ### Шаг 3. Заполнить токены и запустить
@@ -99,7 +122,7 @@ websocket MAX через прокси с российским IP:
 echo 'MAX2TG_WS_PROXY=socks5://user:pass@ru-proxy-host:1080' >> .env
 # для socks-прокси добавьте зависимость:
 echo 'python-socks' >> requirements.txt
-sudo docker compose up -d --build
+sudo docker compose -f docker-compose.build.yml up -d --build
 ```
 (HTTP-прокси `http://host:3128` работает без доп. пакетов.)
 

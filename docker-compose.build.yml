@@ -1,0 +1,24 @@
+# Local development: build the image from the source in this directory instead of
+# pulling the prebuilt one. Use this when you have the repo checked out and want
+# to run your own changes:
+#
+#   docker compose -f docker-compose.build.yml up -d --build
+#
+# For a plain "pull a ready image + .env" deployment, use docker-compose.yml.
+services:
+  max2tg:
+    build: .
+    container_name: max2tg
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Persist the MAX-chat -> Telegram-topic map on the named volume below so
+      # topics are NOT recreated every time the container is rebuilt/recreated.
+      MAX2TG_STATE_PATH: /data/state.json
+    volumes:
+      - max2tg-data:/data
+    # Optional: keep logs on the host
+    #   - ./bridge.log:/app/bridge.log
+
+volumes:
+  max2tg-data:

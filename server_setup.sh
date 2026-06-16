@@ -16,8 +16,10 @@ if ! command -v docker >/dev/null 2>&1; then
   sudo usermod -aG docker "$USER" || true
 fi
 
-echo "Building and starting the bridge..."
-sudo docker compose up -d --build
+echo "Building and starting the bridge from source..."
+# This path builds the image locally (Variant B). For a ready prebuilt image
+# with no source, use docker-compose.yml instead (see DEPLOY.md, Variant B0).
+sudo docker compose -f docker-compose.build.yml up -d --build
 echo
 echo "Done. Follow logs with:  sudo docker compose logs -f"
 echo "Look for: 'Bridge online (own id: ...)'"

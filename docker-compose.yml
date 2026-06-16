@@ -1,12 +1,23 @@
+# Ready-to-run: pulls the prebuilt image from GHCR (built by CI on every push to
+# main), so you do NOT need the source code. Drop just this file plus a filled
+# .env (see .env.example) into a folder and run:
+#
+#   docker compose up -d
+#
+# Update later to the newest image with:
+#
+#   docker compose pull && docker compose up -d
+#
+# To build from local source instead, use docker-compose.build.yml.
 services:
   max2tg:
-    build: .
+    image: ghcr.io/sillkiin/max2tg:latest
     container_name: max2tg
     restart: unless-stopped
     env_file: .env
     environment:
       # Persist the MAX-chat -> Telegram-topic map on the named volume below so
-      # topics are NOT recreated every time the container is rebuilt/recreated.
+      # topics are NOT recreated every time the container is recreated/updated.
       MAX2TG_STATE_PATH: /data/state.json
     volumes:
       - max2tg-data:/data

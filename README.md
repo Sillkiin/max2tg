@@ -95,7 +95,9 @@ and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console
 - 📟 **Старый Android** — через [Termux](https://f-droid.org/packages/com.termux/)
   (мини-сервер 24/7, российский IP).
 - ☁️ **Сервер 24/7** — Docker или systemd, см. **[DEPLOY.md](DEPLOY.md)**. Токены
-  задаются через `.env`, браузер не нужен.
+  задаются через `.env`, браузер не нужен. Готовый образ публикуется в GHCR
+  (`ghcr.io/sillkiin/max2tg:latest`) — на сервере хватает `docker-compose.yml` +
+  `.env`, исходники качать не нужно.
 
 ## ⭐ Режим тем — бот в группе (рекомендуется)
 
