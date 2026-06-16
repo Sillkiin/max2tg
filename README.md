@@ -4,113 +4,98 @@
   <img src="assets/hero.svg" alt="max2tg — мост между мессенджером MAX и Telegram" width="820">
 </p>
 
-> 🇬🇧 *Mirror your MAX (max.ru) messenger into Telegram — read & reply from Telegram. Two-way, media, per-chat topics. Free & self-hosted.* → [In English](#-in-english)
+<p align="center">
+  <a href="https://github.com/Sillkiin/max2tg/actions/workflows/ci-docker.yml"><img src="https://github.com/Sillkiin/max2tg/actions/workflows/ci-docker.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Sillkiin/max2tg/pkgs/container/max2tg"><img src="https://img.shields.io/badge/ghcr.io-max2tg%3Alatest-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/Windows%20·%20Android%20·%20Docker-informational" alt="Platforms">
+</p>
 
-**Читайте и отвечайте на сообщения мессенджера MAX (max.ru) прямо в Telegram.**
-
-`max2tg` — личный мост, который зеркалит ваш аккаунт **MAX** в **Telegram**:
-входящие сообщения, фото, видео, файлы, стикеры прилетают в удобный Telegram, а
-ответить можно прямо оттуда. Бесплатно, с открытым кодом, работает на вашем ПК,
-старом Android или сервере.
-
-> 📱 **Особенно удобно на iOS.** Не хотите держать ещё одно приложение? Все
-> диалоги MAX оказываются в Telegram — там, где вы и так читаете сообщения.
-> Уведомления, поиск, нормальный клиент — всё привычное.
+<p align="center">
+  <b>Читайте и отвечайте на сообщения мессенджера MAX (max.ru) прямо в Telegram.</b><br>
+  Двусторонний · медиа · отдельная тема на каждый чат · бесплатно · self-hosted
+  &nbsp;·&nbsp; 🇬🇧 <a href="#-in-english">In English</a>
+</p>
 
 ---
 
-## Зачем это нужно
+`max2tg` — личный мост: зеркалит ваш аккаунт **MAX** в **Telegram**. Входящие
+сообщения, фото, видео, файлы и стикеры прилетают в Telegram, а ответить можно
+прямо оттуда — ответ уходит в нужный чат MAX.
 
-- 💬 **Один мессенджер вместо двух.** MAX появляется у всё большего числа людей в
-  СНГ — но читать и отвечать удобнее в Telegram. Мост сводит всё в одно место.
-- ↔️ **Двусторонний.** Это не просто пересылка — вы **отвечаете из Telegram**, и
-  сообщение уходит в нужный чат MAX.
-- 🗂 **Каждый чат MAX — отдельная тема** в Telegram-форуме. Диалоги не
-  смешиваются, всё подписано реальными именами.
-- 🖼 **Медиа в обе стороны:** фото, видео, файлы, стикеры.
-- 🔒 **Приватно.** Токены и переписка остаются у вас — ничего не уходит на чужие
-  серверы. Только ваш бот, ваш аккаунт, ваша машина.
-- 🆓 **Бесплатно** и без подписок.
+> 📱 **Особенно удобно на iOS** — не нужно держать отдельное приложение MAX. Все
+> диалоги оказываются в Telegram: привычные уведомления, поиск, нормальный клиент.
 
-## Что умеет
+## Содержание
 
-| Направление | Что передаётся |
+- [Возможности](#возможности)
+- [Быстрый старт](#быстрый-старт)
+- [⭐ Режим тем](#-режим-тем)
+- [Запуск на сервере 24/7](#запуск-на-сервере-247)
+- [Вопросы и ответы](#вопросы-и-ответы)
+- [Ограничения](#ограничения)
+- [Для разработчиков](#для-разработчиков)
+
+---
+
+## Возможности
+
+| | |
+|---|---|
+| ↔️ **Двусторонний** | Не просто пересылка — отвечаете **из Telegram**, и сообщение уходит в чат MAX |
+| 🗂 **Темы** | Каждый MAX-чат = отдельная тема Telegram-форума с именем собеседника |
+| 🖼 **Медиа** | Фото, видео, файлы, стикеры — в обе стороны |
+| 🔒 **Приватно** | Токены и переписка остаются у вас; ничего не уходит на чужие серверы |
+| 🆓 **Бесплатно** | Без подписок, открытый код (MIT) |
+| 🖥 **Где угодно** | Windows, старый Android (Termux) или сервер 24/7 |
+
+**Что именно передаётся:**
+
+| Направление | Содержимое |
 |---|---|
 | **MAX → Telegram** | текст, фото, видео, файлы, стикеры, пометки о голосовых |
-| **Telegram → MAX** | текст (ответом), а также фото / видео / файлы |
-| **Темы** | каждый MAX-чат = тема Telegram-форума с именем собеседника |
+| **Telegram → MAX** | текст (ответом), фото, видео, файлы |
 
 ---
 
-## 🇬🇧 In English
+## Быстрый старт
 
-**max2tg** mirrors your personal **MAX** (max.ru) messenger account into
-**Telegram** and lets you reply from there — handy if you'd rather not keep yet
-another app (especially on **iOS**).
+**Windows, ~5 минут.** Запустите **`run.bat`** — мастер настройки попросит три
+вещи:
 
-- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers —
-  are forwarded to Telegram; reply right from Telegram and it lands in the MAX
-  chat.
-- **Topics.** Each MAX chat becomes its own Telegram forum topic, named after
-  the contact.
-- **Private & free.** Tokens and messages stay on your machine — nothing goes to
-  third-party servers. Open-source (MIT).
-- **Runs anywhere.** Windows, old Android (Termux), or a 24/7 server (Docker /
-  systemd — see [DEPLOY.md](DEPLOY.md)).
+**1. Токен Telegram-бота**
+Создайте бота у [@BotFather](https://t.me/BotFather) командой `/newbot` и
+скопируйте выданный токен.
 
-**Quick start:** run `run.bat`, create a bot via [@BotFather](https://t.me/BotFather),
-and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console:
-`copy(JSON.parse(localStorage.__oneme_auth).token)`).
+**2. `/start` вашему боту**
+Напишите боту `/start`, чтобы мост узнал, куда слать сообщения.
 
-> ⚠️ Uses MAX's **unofficial** web API (no official personal API exists). Voice
-> messages from MAX are only labeled — MAX's own web client can't play them
-> either. Use at your own risk.
+**3. Токен MAX**
+Войдите на [web.max.ru](https://web.max.ru), нажмите `F12` → вкладка **Console**,
+выполните команду и вставьте результат в мастер:
+
+```js
+copy(JSON.parse(localStorage.__oneme_auth).token)
+```
+
+> ⚠️ **Не нажимайте «Выйти» (Logout)** в web.max.ru — это аннулирует токен.
+> Просто закройте вкладку. Токен хранится локально в `config.json`.
+
+Готово ✅ Это **базовый режим**: все сообщения MAX приходят в одну личку с ботом.
+Дальше советуем включить [режим тем](#-режим-тем) — так гораздо удобнее.
 
 ---
 
-## Быстрый старт (Windows, ~5 минут)
+## ⭐ Режим тем
 
-Запустите `run.bat` — мастер настройки попросит три вещи:
+Чтобы каждый MAX-чат стал **отдельной темой** Telegram-форума, а не сваливался в
+одну ленту:
 
-1. **Токен Telegram-бота** — создайте бота у [@BotFather](https://t.me/BotFather)
-   командой `/newbot` (бесплатно).
-2. **`/start` вашему боту** — чтобы мост знал, куда слать сообщения.
-3. **Токен MAX** — войдите на [web.max.ru](https://web.max.ru), нажмите `F12` →
-   вкладка **Console**, выполните и вставьте результат в мастер:
-   ```js
-   copy(JSON.parse(localStorage.__oneme_auth).token)
-   ```
-   > Токен сохраняется локально. **Не нажимайте Logout** в web.max.ru — это его
-   > аннулирует; просто закройте вкладку.
-
-Готово — это **базовый режим**: все сообщения MAX идут в одну личку с ботом.
-
-> ⭐️ **Рекомендуется включить режим тем** — добавьте бота в Telegram-группу
-> администратором, и каждый чат MAX станет **отдельной темой** (как на схеме
-> вверху). См. раздел **«Режим тем»** ниже.
-
-## Где запускать
-
-- 🖥 **Windows** — `run.bat` (+ автозапуск через `shell:startup`).
-- 📟 **Старый Android** — через [Termux](https://f-droid.org/packages/com.termux/)
-  (мини-сервер 24/7, российский IP).
-- ☁️ **Сервер 24/7** — Docker или systemd, см. **[DEPLOY.md](DEPLOY.md)**. Токены
-  задаются через `.env`, браузер не нужен. Готовый образ публикуется в GHCR
-  (`ghcr.io/sillkiin/max2tg:latest`) — на сервере хватает `docker-compose.yml` +
-  `.env`, исходники качать не нужно.
-
-## ⭐ Режим тем — бот в группе (рекомендуется)
-
-Чтобы каждый MAX-чат стал **отдельной темой**, а не сваливался в одну ленту:
-
-1. Создайте **Telegram-супергруппу** и включите в её настройках **«Темы»**
-   (Topics).
-2. **Добавьте вашего бота в группу** и выдайте ему права **администратора** с
-   разрешением **«Управление темами»** (Manage Topics) — без этого мост не сможет
-   создавать темы.
-3. Узнайте **id группы** (начинается с `-100…` — например, через бота
-   [@getidsbot](https://t.me/getidsbot), или из адресной строки
-   [web.telegram.org](https://web.telegram.org)) и пропишите в `config.json`:
+1. Создайте **Telegram-супергруппу** и включите в настройках **«Темы» (Topics)**.
+2. **Добавьте бота в группу**, дайте права **администратора** с разрешением
+   **«Управление темами» (Manage Topics)** — без этого мост не создаст темы.
+3. Узнайте **id группы** (начинается с `-100…`, например через
+   [@getidsbot](https://t.me/getidsbot)) и пропишите в `config.json`:
 
 ```json
 {
@@ -122,36 +107,84 @@ and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console
 }
 ```
 
-Каждый MAX-чат получит свою тему с именем собеседника (связь хранится в
-`state.json`). Пишете в теме — уходит в этот чат MAX; `Reply` отправляет ответ
-цитатой.
-
-> **Темы пересоздаются после каждого перезапуска?** Значит `state.json`
-> (карта «MAX-чат → тема») не сохраняется. В Docker он теперь лежит на
-> постоянном томе (`docker-compose.yml`), путь можно задать через
-> `MAX2TG_STATE_PATH`. При запуске без Docker файл хранится рядом со скриптами.
-
-> Чтобы бот **не писал** «✅ Отправлено в MAX» после каждого ответа (не засорять
-> тему), добавьте в `config.json`: `"telegram_confirm_sent": false` или задайте
-> переменную окружения `MAX2TG_TELEGRAM_CONFIRM_SENT=false` (работает даже когда
-> токены берутся из `config.json`). Ошибки отправки при этом всё равно
-> показываются.
+Каждый MAX-чат получит свою тему с именем собеседника. Пишете в теме — уходит в
+этот чат MAX; **Reply** (свайп) отправляет ответ цитатой.
 
 ---
 
-## Честные ограничения
+## Запуск на сервере 24/7
 
-- ⚙️ Используется **неофициальный** API MAX (через
-  [vkmax](https://github.com/nsdkinx/vkmax) — официального API для личных
-  аккаунтов нет). Для MAX сессия выглядит как вход через веб-версию; теоретически
-  он может её ограничить.
+Мост держит постоянное соединение, поэтому ему нужен хост, который **не
+«засыпает»** (обычные бесплатные «спящие» PaaS не подойдут).
+
+| Где | Как |
+|---|---|
+| 🖥 **Windows** | `run.bat` + автозапуск через `shell:startup` |
+| 📟 **Старый Android** | [Termux](https://f-droid.org/packages/com.termux/) — мини-сервер с российским IP |
+| ☁️ **Сервер (Docker)** | готовый образ из GHCR, без исходников ↓ |
+
+**Готовый Docker-образ — нужны только два файла:**
+
+```bash
+mkdir max2tg && cd max2tg
+curl -O https://raw.githubusercontent.com/Sillkiin/max2tg/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/Sillkiin/max2tg/main/.env.example
+nano .env                 # три значения MAX2TG_* (свежий токен MAX!)
+docker compose up -d      # подтянет ghcr.io/sillkiin/max2tg:latest
+```
+
+Обновление позже: `docker compose pull && docker compose up -d`.
+Полный гайд (Oracle Cloud, прокси, systemd) — в **[DEPLOY.md](DEPLOY.md)**.
+
+---
+
+## Вопросы и ответы
+
+<details>
+<summary><b>Темы пересоздаются после каждого перезапуска</b></summary>
+
+<br>Значит не сохраняется `state.json` (карта «MAX-чат → тема»). В Docker он лежит
+на постоянном томе (`docker-compose.yml`); путь можно задать через
+`MAX2TG_STATE_PATH`. Без Docker файл хранится рядом со скриптами.
+</details>
+
+<details>
+<summary><b>Как убрать «✅ Отправлено в MAX» после каждого ответа</b></summary>
+
+<br>Добавьте в `config.json`: <code>"telegram_confirm_sent": false</code> (или
+переменную окружения <code>MAX2TG_TELEGRAM_CONFIRM_SENT=false</code>). Ошибки
+отправки при этом всё равно показываются.
+</details>
+
+<details>
+<summary><b>Мост пишет, что токен MAX устарел</b></summary>
+
+<br>Получите свежий токен на <a href="https://web.max.ru">web.max.ru</a> (та же
+команда в консоли) и обновите его в <code>config.json</code> или в
+<code>.env</code>, затем перезапустите мост.
+</details>
+
+---
+
+## Ограничения
+
+- ⚙️ **Неофициальный API MAX** (через [vkmax](https://github.com/nsdkinx/vkmax) —
+  официального API для личных аккаунтов нет). Для MAX это выглядит как вход через
+  веб-версию; теоретически он может ограничить сессию.
 - 🎤 **Голосовые из MAX** приходят подписью «🎤 Голосовое (N с)» — само аудио
-  недоступно даже веб-клиенту MAX (он помечает их `UNSUPPORTED`).
-- 📦 Файлы/видео до **~50 МБ** (лимит Telegram-ботов); что больше — уведомление
+  недоступно даже веб-клиенту MAX.
+- 📦 **Файлы и видео до ~50 МБ** (лимит Telegram-ботов); крупнее — уведомление
   «открыть в MAX».
-- 🔑 Токены лежат локально в `config.json` (в `.gitignore`, не коммитятся).
+- 🔑 **Токены** лежат локально в `config.json` (в `.gitignore`, не коммитятся).
 
-## Как это устроено
+---
+
+## Для разработчиков
+
+<details>
+<summary>Структура проекта и сборка</summary>
+
+<br>
 
 | Файл | Назначение |
 |------|------------|
@@ -161,10 +194,47 @@ and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console
 | `attaches.py` / `mediamax.py` | разбор и загрузка медиа MAX |
 | `tg.py` | мини-клиент Telegram Bot API |
 | `state.py` / `config.py` | карта тем и конфигурация |
-| `Dockerfile` / `max2tg.service` / `DEPLOY.md` | деплой на сервер |
+| `Dockerfile` / `docker-compose*.yml` / `DEPLOY.md` | деплой |
+
+```bash
+python -m unittest discover -s tests     # тесты
+```
+
+CI (GitHub Actions) на каждый push в `main` гоняет тесты и публикует
+Docker-образ `ghcr.io/sillkiin/max2tg:latest`. Для локальной сборки из исходников:
+`docker compose -f docker-compose.build.yml up -d --build`.
+</details>
+
+---
+
+## 🇬🇧 In English
+
+<details>
+<summary>Click to expand</summary>
+
+<br>**max2tg** mirrors your personal **MAX** (max.ru) messenger account into
+**Telegram** and lets you reply from there — handy if you'd rather not keep yet
+another app (especially on **iOS**).
+
+- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers —
+  are forwarded to Telegram; reply right from Telegram and it lands in the MAX chat.
+- **Topics.** Each MAX chat becomes its own Telegram forum topic, named after the contact.
+- **Private & free.** Tokens and messages stay on your machine. Open-source (MIT).
+- **Runs anywhere.** Windows, old Android (Termux), or a 24/7 server. Pull the
+  ready image: `docker pull ghcr.io/sillkiin/max2tg:latest`.
+
+**Quick start:** run `run.bat`, create a bot via [@BotFather](https://t.me/BotFather),
+and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console:
+`copy(JSON.parse(localStorage.__oneme_auth).token)`).
+
+> ⚠️ Uses MAX's **unofficial** web API. Voice messages from MAX are only labeled —
+> MAX's own web client can't play them either. Use at your own risk.
+</details>
+
+---
 
 ## Дисклеймер
 
 Личный инструмент для удобства, не связан с MAX/VK и Telegram. Использует
 неофициальный API — применяйте на свой риск и соблюдайте условия сервисов.
-Лицензия: MIT.
+**Лицензия: [MIT](LICENSE).**
