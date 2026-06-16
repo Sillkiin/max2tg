@@ -23,8 +23,14 @@
 сообщения, фото, видео, файлы и стикеры прилетают в Telegram, а ответить можно
 прямо оттуда — ответ уходит в нужный чат MAX.
 
-> 📱 **Особенно удобно на iOS** — не нужно держать отдельное приложение MAX. Все
-> диалоги оказываются в Telegram: привычные уведомления, поиск, нормальный клиент.
+> ## 🍎 Для пользователей iPhone / iPad
+>
+> **MAX удалён из App Store** — на iOS его официально не установить, и нормально
+> пользоваться MAX на Apple сейчас по сути невозможно. **`max2tg` это решает:**
+> все ваши диалоги MAX приходят в **Telegram**, который у вас уже есть, —
+> **с обычными push-уведомлениями** 🔔, поиском и нормальным клиентом. Отвечать
+> тоже можно прямо из Telegram. По факту это **единственный рабочий способ**
+> читать и писать в MAX с iPhone.
 
 ## Содержание
 
@@ -42,6 +48,8 @@
 
 | | |
 |---|---|
+| 🍎 **Работает на iOS** | MAX удалён из App Store — а здесь все диалоги приходят в Telegram, который на iPhone есть всегда |
+| 🔔 **Уведомления** | Пуши о новых сообщениях MAX приходят как обычные уведомления Telegram — на iOS это единственный способ их получать |
 | ↔️ **Двусторонний** | Не просто пересылка — отвечаете **из Telegram**, и сообщение уходит в чат MAX |
 | 🗂 **Темы** | Каждый MAX-чат = отдельная тема Telegram-форума с именем собеседника |
 | 🖼 **Медиа** | Фото, видео, файлы, стикеры — в обе стороны |
@@ -213,8 +221,12 @@ Docker-образ `ghcr.io/sillkiin/max2tg:latest`. Для локальной с
 <summary>Click to expand</summary>
 
 <br>**max2tg** mirrors your personal **MAX** (max.ru) messenger account into
-**Telegram** and lets you reply from there — handy if you'd rather not keep yet
-another app (especially on **iOS**).
+**Telegram** and lets you reply from there.
+
+> 🍎 **MAX is gone from the App Store** — you can't install it on iPhone/iPad
+> anymore. max2tg brings every MAX chat into **Telegram** (which you already
+> have) **with normal push notifications** — effectively the only way to use MAX
+> on iOS.
 
 - **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers —
   are forwarded to Telegram; reply right from Telegram and it lands in the MAX chat.
