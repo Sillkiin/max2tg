@@ -398,6 +398,31 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
                 await bridge._handle_command(-100222, 42, "/mute")   # toggle back
                 self.assertFalse(bridge._state.get_topic(555)["muted"])
 
+    async def test_mute_command_on_channel_matches_button(self):
+        # Regression: a silent-by-default channel's FIRST /mute must UNMUTE it
+        # (notify), exactly like the inline button's first tap — not blindly set
+        # muted=True off the raw flag, which would disagree with the button.
+        bridge = self.make_bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            bridge._state.save_topic(-7, thread_id=1, title="Ch", chat_type="channel")
+            with patch("bridge.tg.send_message", return_value=1):
+                await bridge._handle_command(-100222, 1, "/mute")
+            self.assertFalse(bridge._state.get_topic(-7)["muted"])  # unmuted, like button
+
+    async def test_mute_command_refreshes_pinned_button(self):
+        # When a topic already has a pinned control button, /mute must re-label it
+        # so the button never lies about the current state.
+        bridge = self.make_bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            bridge._state.save_topic(555, thread_id=42, title="Людмила", chat_type="dialog")
+            bridge._state.set_control_message(555, 88)
+            with patch("bridge.tg.send_message", return_value=1), \
+                    patch("bridge.tg.edit_message_text") as edit:
+                await bridge._handle_command(-100222, 42, "/mute")
+            edit.assert_called_once()  # pinned button kept in sync with /mute
+
     def test_mute_markup_label_reflects_action(self):
         silent = MaxToTelegramBridge._mute_markup(-7, silent=True)["inline_keyboard"][0][0]
         self.assertEqual(silent["callback_data"], "mute:-7")

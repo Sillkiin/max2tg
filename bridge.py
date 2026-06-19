@@ -616,25 +616,48 @@ class MaxToTelegramBridge:
         a channel's "Вкл./Выкл. звук". Lazy: created on the topic's first forward."""
         topic = self._state.get_topic(chat_id)
         if not topic or topic.get("control_msg_id") or not self._forum_chat_id:
+            return  # fast path (no lock): control already exists / no forum
+        # Serialize per chat: two concurrent first-forwards from the same new
+        # chat would both pass the check above and double-post/double-pin. The
+        # hot path never reaches here, so the lock stays off the common case.
+        async with self._topic_lock(chat_id):
+            topic = self._state.get_topic(chat_id)
+            if not topic or topic.get("control_msg_id"):
+                return
+            silent = self._is_silent(chat_id, topic.get("chat_type") == "channel")
+            try:
+                msg_id = await asyncio.to_thread(
+                    tg.send_message, self._token, self._forum_chat_id,
+                    "🔔 Уведомления этого чата:", message_thread_id=thread_id,
+                    disable_notification=True,
+                    reply_markup=self._mute_markup(chat_id, silent))
+            except Exception as exc:
+                _logger.warning("control button post failed for %s: %s", chat_id, exc)
+                return
+            if not msg_id:
+                return
+            self._state.set_control_message(chat_id, msg_id)
+            try:
+                await asyncio.to_thread(
+                    tg.pin_chat_message, self._token, self._forum_chat_id, msg_id)
+            except Exception as exc:
+                _logger.info("pin control failed for %s: %s", chat_id, exc)
+
+    async def _refresh_control_button(self, max_chat_id, new_muted,
+                                      message_id: int | None = None) -> None:
+        """Re-label the pinned control button to match the new mute state. Shared
+        by the inline tap and /mute so the two paths never show divergent labels."""
+        topic = self._state.get_topic(max_chat_id)
+        target_id = (topic.get("control_msg_id") if topic else None) or message_id
+        if not target_id or not self._forum_chat_id:
             return
-        silent = self._is_silent(chat_id, topic.get("chat_type") == "channel")
-        try:
-            msg_id = await asyncio.to_thread(
-                tg.send_message, self._token, self._forum_chat_id,
-                "🔔 Уведомления этого чата:", message_thread_id=thread_id,
-                disable_notification=True,
-                reply_markup=self._mute_markup(chat_id, silent))
-        except Exception as exc:
-            _logger.warning("control button post failed for %s: %s", chat_id, exc)
-            return
-        if not msg_id:
-            return
-        self._state.set_control_message(chat_id, msg_id)
         try:
             await asyncio.to_thread(
-                tg.pin_chat_message, self._token, self._forum_chat_id, msg_id)
+                tg.edit_message_text, self._token, self._forum_chat_id, target_id,
+                "🔔 Уведомления этого чата:",
+                reply_markup=self._mute_markup(max_chat_id, new_muted))
         except Exception as exc:
-            _logger.info("pin control failed for %s: %s", chat_id, exc)
+            _logger.info("refresh control button failed: %s", exc)
 
     async def _handle_callback(self, cb: dict) -> None:
         """Handle an inline mute-button tap (callback_query)."""
@@ -669,13 +692,7 @@ class MaxToTelegramBridge:
         is_channel = topic.get("chat_type") == "channel"
         new_muted = not self._is_silent(max_chat_id, is_channel)
         self._state.set_muted(max_chat_id, new_muted)
-        try:
-            await asyncio.to_thread(
-                tg.edit_message_text, self._token, chat, msg.get("message_id"),
-                "🔔 Уведомления этого чата:",
-                reply_markup=self._mute_markup(max_chat_id, new_muted))
-        except Exception as exc:
-            _logger.info("edit control failed: %s", exc)
+        await self._refresh_control_button(max_chat_id, new_muted, msg.get("message_id"))
         await ack("🔕 Без звука" if new_muted else "🔔 Со звуком")
 
     async def _send_note(self, telegram_chat_id, text, thread_id,
@@ -967,11 +984,16 @@ class MaxToTelegramBridge:
             if not topic:
                 await reply("Не нашёл чат для этой темы.")
                 return
-            muted = self._state.set_muted(
-                topic["max_chat_id"], not bool(topic.get("muted")))
+            max_chat_id = topic["max_chat_id"]
+            is_channel = topic.get("chat_type") == "channel"
+            # Toggle on the *effective* state (same basis as the inline button) so
+            # /mute and the button never disagree on a silent-by-default channel.
+            new_muted = not self._is_silent(max_chat_id, is_channel)
+            self._state.set_muted(max_chat_id, new_muted)
+            await self._refresh_control_button(max_chat_id, new_muted)
             await reply("🔕 Тема заглушена — сообщения этого чата приходят без звука.\n"
                         "/mute ещё раз — вернуть звук."
-                        if muted else "🔔 Звук для этой темы включён.")
+                        if new_muted else "🔔 Звук для этой темы включён.")
             return
         if cmd not in ("join", "find", "dm"):
             return  # ignore unknown commands silently (could be Telegram's own)

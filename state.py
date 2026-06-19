@@ -119,9 +119,8 @@ class BridgeState:
         topic = self.get_topic(max_chat_id)
         if not topic:
             return bool(muted)
-        topic["muted"] = bool(muted)
-        topic["updated_at"] = int(time.time())
-        self._data["topics"][str(max_chat_id)] = topic
+        updated = {**topic, "muted": bool(muted), "updated_at": int(time.time())}
+        self._data["topics"][str(max_chat_id)] = updated
         self.save()
         return bool(muted)
 
@@ -130,8 +129,7 @@ class BridgeState:
         topic = self.get_topic(max_chat_id)
         if not topic:
             return
-        topic["control_msg_id"] = message_id
-        self._data["topics"][str(max_chat_id)] = topic
+        self._data["topics"][str(max_chat_id)] = {**topic, "control_msg_id": message_id}
         self.save()
 
 
