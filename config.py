@@ -186,10 +186,15 @@ def _restrict_permissions() -> None:
             username = os.getlogin()
         except OSError:
             return
+    # Qualify the principal as DOMAIN\USER. A bare username is ambiguous when the
+    # computer name equals the username: icacls resolves it to "MACHINE\" (empty
+    # account) and, with /inheritance:r, locks the real user out of the file.
+    domain = os.environ.get("USERDOMAIN") or os.environ.get("COMPUTERNAME")
+    principal = f"{domain}\\{username}" if domain else username
     try:
         subprocess.run(
             ["icacls", str(CONFIG_PATH), "/inheritance:r",
-             "/grant:r", f"{username}:(R,W)"],
+             "/grant:r", f"{principal}:(R,W)"],
             check=False, capture_output=True,
         )
     except OSError as exc:

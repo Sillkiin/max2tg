@@ -45,9 +45,15 @@ def _restrict_log_perms() -> None:
         if os.name == "nt":
             user = os.environ.get("USERNAME")
             if user:
+                # Qualify the principal as DOMAIN\USER. A bare username is
+                # ambiguous when the computer name equals the username: icacls
+                # resolves it to "MACHINE\" (empty account) and, combined with
+                # /inheritance:r, locks the real user out of the file entirely.
+                domain = os.environ.get("USERDOMAIN") or os.environ.get("COMPUTERNAME")
+                principal = f"{domain}\\{user}" if domain else user
                 subprocess.run(
                     ["icacls", str(LOG_PATH), "/inheritance:r",
-                     "/grant:r", f"{user}:(R,W)"],
+                     "/grant:r", f"{principal}:(R,W)"],
                     check=False, capture_output=True,
                 )
         else:
