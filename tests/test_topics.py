@@ -377,6 +377,35 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
                 await bridge._on_packet(bridge._client, packet)
             self.assertIsNone(bridge._state.get_topic(555))
 
+    async def test_seed_skips_own_message(self):
+        # Your own message must NOT be seeded back as "Вы: …".
+        bridge = self.make_bridge()
+        bridge._config["telegram_seed_last_messages"] = True
+        bridge._own_id = 999
+        message = {"id": "m9", "sender": 999, "text": "моё"}
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            bridge._state.save_topic(100, thread_id=41, title="F", chat_type="dialog")
+            with patch("bridge.tg.send_message") as send:
+                seeded = await bridge._seed_last_message(object(), 100, 41, message)
+        self.assertFalse(seeded)
+        send.assert_not_called()
+
+    async def test_duplicate_max_message_forwarded_once(self):
+        # MAX replaying a message on reconnect must not double-post it.
+        bridge = self.make_bridge()
+        bridge._own_id = 999
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            bridge._client = object()
+            packet = {"opcode": 128, "payload": {
+                "chatId": 555, "message": {"id": 7, "sender": 1, "text": "hi"}}}
+            with patch.object(bridge, "_resolve_sender_name", new=AsyncMock(return_value="A")), \
+                    patch.object(bridge, "_forward", new=AsyncMock()) as fwd:
+                await bridge._on_packet(bridge._client, packet)
+                await bridge._on_packet(bridge._client, packet)   # same id replayed
+            fwd.assert_awaited_once()
+
     async def test_falls_back_when_topic_creation_fails(self):
         bridge = self.make_bridge()
         with tempfile.TemporaryDirectory() as tmp:
@@ -515,12 +544,13 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
         bridge = self.make_bridge()
         bridge._config["telegram_seed_last_messages"] = True
         bridge._own_id = 999
-        message = {"id": "m1", "sender": 999, "text": "Last text"}
+        message = {"id": "m1", "sender": 123, "text": "Last text"}
 
         with tempfile.TemporaryDirectory() as tmp:
             bridge._state = BridgeState(Path(tmp) / "state.json")
             bridge._state.save_topic(100, thread_id=41, title="Family", chat_type="chat")
-            with patch("bridge.tg.send_message", return_value=555) as send_message:
+            with patch.object(bridge, "_resolve_sender_name", new=AsyncMock(return_value="Alice")), \
+                    patch("bridge.tg.send_message", return_value=555) as send_message:
                 first = await bridge._seed_last_message(object(), 100, 41, message)
                 second = await bridge._seed_last_message(object(), 100, 41, message)
 

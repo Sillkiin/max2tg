@@ -117,11 +117,25 @@ class StartDmTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("chatId", call["payload"])       # never in the chatId slot
         self.assertEqual(call["payload"]["message"]["text"], "привет")
 
-    async def test_rejects_non_numeric_id(self):
+    async def test_rejects_unknown_recipient(self):
         client = AsyncMock()
         res = await maxactions.start_dm(client, "не-число", "привет")
-        self.assertIn("числовой id", res.text)
+        self.assertIn("Кому писать", res.text)
         client.invoke_method.assert_not_called()
+
+    async def test_phone_recipient_resolved_then_dm(self):
+        # /dm by phone: resolve to a user_id (opcode 46), then send by userId.
+        client = AsyncMock(invoke_method=AsyncMock(side_effect=[
+            {"payload": {"contact": {"id": 21243808}}},        # opcode 46 lookup
+            {"payload": {"chatId": 7, "message": {"id": 1}}},  # opcode 64 send
+        ]))
+        res = await maxactions.start_dm(client, "+7 999 123-45-67", "привет")
+        self.assertIn("Отправлено", res.text)
+        calls = client.invoke_method.call_args_list
+        self.assertEqual(calls[0].kwargs["opcode"], 46)
+        self.assertEqual(calls[0].kwargs["payload"]["phone"], "+79991234567")
+        self.assertEqual(calls[1].kwargs["opcode"], 64)
+        self.assertEqual(calls[1].kwargs["payload"]["userId"], 21243808)
 
     async def test_rejects_empty_text(self):
         client = AsyncMock()

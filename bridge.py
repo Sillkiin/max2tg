@@ -30,6 +30,9 @@ RECONNECT_DELAY_SECONDS = 15
 RECONNECT_MAX_DELAY = 300
 REPLY_MAP_LIMIT = 10000
 NAME_CACHE_LIMIT = 5000
+# Bounded dedup of forwarded (chat_id, message_id) so a MAX reconnect replay
+# can't double-post a message.
+SEEN_MESSAGES_LIMIT = 10000
 # Cap concurrent per-packet handlers so a media burst can't exhaust the asyncio
 # to_thread pool and starve the Telegram long-poll.
 MEDIA_CONCURRENCY = 8
@@ -46,8 +49,8 @@ _HELP_TEXT = (
     "   https://max.ru/join/…\n\n"
     "🔍 Найти человека — пришлите телефон или @ник, получите его id:\n"
     "   +79991234567   ·   @nickname\n\n"
-    "✍️ Написать новому человеку — /dm <id> <текст> (id берётся из 🔍):\n"
-    "   /dm 21243808 привет\n\n"
+    "✍️ Написать человеку — /dm <телефон или id> <текст>:\n"
+    "   /dm +79991234567 привет\n\n"
     "⌨️ Ещё: /join <ссылка>, /find <телефон|@ник|id>, /help."
 )
 _WELCOME_TEXT = "👋 Привет! Я зеркалю ваш MAX в Telegram.\n\n" + _HELP_TEXT
@@ -55,7 +58,7 @@ _WELCOME_TEXT = "👋 Привет! Я зеркалю ваш MAX в Telegram.\n\
 _BOT_COMMANDS = [
     {"command": "join", "description": "Вступить в канал/группу/чат MAX по ссылке"},
     {"command": "find", "description": "Найти человека/канал: телефон, @ник, id"},
-    {"command": "dm", "description": "Написать человеку: /dm <id из /find> <текст>"},
+    {"command": "dm", "description": "Написать человеку: /dm <телефон или id> <текст>"},
     {"command": "help", "description": "Справка по командам"},
 ]
 
@@ -148,6 +151,9 @@ class MaxToTelegramBridge:
         self._own_id: int | None = None
         # Bounded LRU so a long-running process can't grow the cache forever.
         self._name_cache: "OrderedDict[int, str]" = OrderedDict()
+        # (chat_id, message_id) of forwarded messages — drop duplicates (a MAX
+        # reconnect can replay recent messages).
+        self._seen_messages: "OrderedDict[tuple, None]" = OrderedDict()
         self._client: MaxClient | None = None
         self._state = BridgeState()
         # telegram message_id -> {"chat_id", "message_id", "sender"}
@@ -336,14 +342,14 @@ class MaxToTelegramBridge:
                     existing += 1
                     thread_id = existing_topic.get("telegram_thread_id")
                     if thread_id:
+                        # Refresh the title only. Do NOT re-seed: an existing topic
+                        # already has its history, and re-posting its current last
+                        # message on every restart duplicates it (your own messages
+                        # included). Only brand-new topics below seed once.
                         title, chat_type, sender = await self._sync_chat_meta(client, chat)
                         await self._refresh_topic_title(
                             chat_id, thread_id, title, chat_type, sender
                         )
-                        if await self._seed_last_message(
-                            client, chat_id, thread_id, chat.get("lastMessage")
-                        ):
-                            seeded += 1
                     continue
 
                 title, chat_type, sender = await self._sync_chat_meta(client, chat)
@@ -465,6 +471,8 @@ class MaxToTelegramBridge:
         message_id = message.get("id")
         if message_id is None:
             return False
+        if message.get("sender") is not None and message.get("sender") == self._own_id:
+            return False  # never seed your own message back as "Вы: …"
 
         topic = self._state.get_topic(chat_id) or {}
         if str(topic.get("last_seeded_max_message_id")) == str(message_id):
@@ -548,6 +556,13 @@ class MaxToTelegramBridge:
 
                 chat_id = payload.get("chatId")
                 max_message_id = message.get("id")
+                if max_message_id is not None:
+                    key = (chat_id, str(max_message_id))
+                    if key in self._seen_messages:
+                        return  # already forwarded (e.g. MAX replayed on reconnect)
+                    self._seen_messages[key] = None
+                    while len(self._seen_messages) > SEEN_MESSAGES_LIMIT:
+                        self._seen_messages.popitem(last=False)
                 text = (message.get("text") or "").strip()
                 parsed = attaches.parse(message)
                 if message.get("attaches"):

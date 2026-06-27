@@ -97,6 +97,14 @@ def _normalize_phone(s: str) -> str | None:
     return "+" + digits
 
 
+def _looks_like_phone(s: str) -> bool:
+    """A phone number rather than a numeric id or other text."""
+    digits = re.sub(r"\D", "", s)
+    return (re.fullmatch(r"[+\d\s()\-]+", s) is not None
+            and (s.startswith("+") or len(digits) >= 11
+                 or (bool(re.search(r"[+\s()\-]", s)) and len(digits) >= 7)))
+
+
 async def join(client, raw: str) -> CommandResult:
     """Join a MAX channel/group/chat by link or @username (opcode 57 + subscribe)."""
     link = _norm_link(raw)
@@ -131,11 +139,7 @@ async def find(client, query: str) -> CommandResult:
     s = query.strip()
     if len(s) > _MAX_QUERY_LEN:
         return CommandResult("⚠️ Слишком длинный запрос для поиска.")
-    phone_digits = re.sub(r"\D", "", s)
-    is_phone = (re.fullmatch(r"[+\d\s()\-]+", s) is not None
-                and (s.startswith("+") or len(phone_digits) >= 11
-                     or (bool(re.search(r"[+\s()\-]", s)) and len(phone_digits) >= 7)))
-    if is_phone:
+    if _looks_like_phone(s):
         phone = _normalize_phone(s)
         if not phone:
             return CommandResult("🔍 Похоже на телефон, но номер неполный. Пример: +79991234567")
@@ -174,20 +178,42 @@ async def find(client, query: str) -> CommandResult:
         return CommandResult(f"⚠️ Ошибка поиска: {_short(exc)}")
 
 
-async def start_dm(client, user_id: str, text: str) -> CommandResult:
-    """Message a person by their numeric user_id (the id from /find). Sends opcode
-    64 with a top-level `userId` (NOT `chatId`): MAX creates the 1:1 dialog and
-    returns its real chatId. The peer's reply then arrives as its own topic."""
-    try:
-        uid = int(str(user_id).strip())
-    except (TypeError, ValueError):
-        return CommandResult(
-            "⚠️ Нужен числовой id (как из 🔍 /find). Пример: /dm 21243808 привет")
+async def _resolve_user_id(client, recipient) -> int | None:
+    """A bare numeric user_id as-is, or look one up from a phone (opcode 46)."""
+    s = str(recipient).strip()
+    if _looks_like_phone(s):
+        phone = _normalize_phone(s)
+        if not phone:
+            return None
+        try:
+            data = await client.invoke_method(opcode=46, payload={"phone": phone})
+        except Exception as exc:
+            _logger.warning("dm phone lookup failed: %s", exc)
+            return None
+        payload = data.get("payload", {}) if isinstance(data, dict) else {}
+        contact = payload.get("contact")
+        if isinstance(contact, dict) and contact.get("id"):
+            return int(contact["id"])
+        return None
+    if s.lstrip("-").isdigit():
+        return int(s)
+    return None
+
+
+async def start_dm(client, recipient: str, text: str) -> CommandResult:
+    """Message a person by **phone or numeric user_id** (the id from /find). Sends
+    opcode 64 with a top-level `userId` (NOT `chatId`): MAX creates the 1:1 dialog
+    and returns its real chatId. The peer's reply then arrives as its own topic."""
     body = (text or "").strip()
     if not body:
-        return CommandResult("⚠️ Пустое сообщение. Пример: /dm 21243808 привет")
+        return CommandResult("⚠️ Пустое сообщение. Пример: /dm +79991234567 привет")
     if len(body) > 4000:
         return CommandResult("⚠️ Слишком длинное сообщение (макс. 4000 символов).")
+    uid = await _resolve_user_id(client, recipient)
+    if uid is None:
+        return CommandResult(
+            "⚠️ Кому писать? Укажите телефон или id (из 🔍 /find).\n"
+            "Примеры: /dm +79991234567 привет   ·   /dm 21243808 привет")
     try:
         data = await client.invoke_method(opcode=64, payload={
             "userId": uid,
@@ -206,5 +232,5 @@ async def start_dm(client, user_id: str, text: str) -> CommandResult:
             f"✅ Отправлено! Диалог с человеком (id {uid}) создан — его ответ "
             "придёт отдельной темой, дальше переписывайтесь там.")
     except Exception as exc:
-        _logger.warning("start_dm to %s failed: %s", user_id, exc)
+        _logger.warning("start_dm to %s failed: %s", uid, exc)
         return CommandResult(f"⚠️ Не удалось отправить: {_short(exc)}")
