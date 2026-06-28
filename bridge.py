@@ -147,6 +147,8 @@ def _message_content(message: dict) -> tuple[str, list]:
         inner_text = (inner.get("text") or "").strip()
         text = f"{prefix}:\n{inner_text}" if inner_text else prefix
         parsed = attaches.parse(inner)
+        if inner.get("attaches"):
+            _log_raw_attaches(inner)  # capture forwarded media structure
     return text, parsed
 
 
