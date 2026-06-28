@@ -190,6 +190,49 @@ def send_message(token: str, chat_id: int | str, text: str,
     return first_id
 
 
+def edit_message_text(token: str, chat_id: int | str, message_id: int,
+                      text: str) -> bool:
+    """Edit a previously sent text message in place (mirrors a MAX edit).
+
+    Returns False if there's nothing to send (empty text — Telegram rejects an
+    empty edit). A "message is not modified" API error is treated as a no-op by
+    callers, since re-rendering identical content is harmless. Raises on other
+    API errors so a genuinely broken edit is visible.
+    """
+    if not text:
+        return False
+    _call(token, "editMessageText", chat_id=chat_id, message_id=message_id,
+          text=text[:MAX_MESSAGE_LEN], disable_web_page_preview=True)
+    return True
+
+
+def edit_message_caption(token: str, chat_id: int | str, message_id: int,
+                         caption: str) -> bool:
+    """Edit the caption of a previously sent media message (mirrors a MAX edit)."""
+    _call(token, "editMessageCaption", chat_id=chat_id, message_id=message_id,
+          caption=(caption or "")[:MAX_CAPTION_LEN])
+    return True
+
+
+def delete_message(token: str, chat_id: int | str, message_id: int) -> bool:
+    """Delete a message we previously sent (mirrors a MAX delete)."""
+    return bool(_call(token, "deleteMessage", chat_id=chat_id,
+                      message_id=message_id))
+
+
+def set_message_reaction(token: str, chat_id: int | str, message_id: int,
+                         emoji: str | None = None) -> bool:
+    """Set (or clear, when emoji is None) the bot's reaction on a message.
+
+    Telegram only accepts a fixed set of emoji for bot reactions; an unsupported
+    one raises (callers treat that as a best-effort miss, not a failure).
+    """
+    reaction = [{"type": "emoji", "emoji": emoji}] if emoji else []
+    _call(token, "setMessageReaction", chat_id=chat_id, message_id=message_id,
+          reaction=reaction)
+    return True
+
+
 def _send_media(token: str, method: str, field: str, chat_id: int | str,
                 url: str, caption: str | None, filename: str | None,
                 message_thread_id: int | None = None) -> int | None:

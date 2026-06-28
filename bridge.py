@@ -27,9 +27,21 @@ from state import BridgeState, normalize_topic_title
 _logger = logging.getLogger(__name__)
 
 INCOMING_MESSAGE_OPCODE = 128
+# Server-push opcodes for mirroring MAX edits/deletes/reactions (reverse-
+# engineered; see protocol notes). An EDIT re-arrives as opcode 128 reusing the
+# original message id, marked message.status == "EDITED". DELETE is 142 (single)
+# / 140 (range). REACTION arrives as 156 (payload.reactionInfo) or 155 (flat).
+EDITED_STATUS = "EDITED"
+DELETE_OPCODES = frozenset({140, 142})
+REACTION_OPCODES = frozenset({155, 156})
 RECONNECT_DELAY_SECONDS = 15
 RECONNECT_MAX_DELAY = 300
 REPLY_MAP_LIMIT = 10000
+# Forward map: (max_chat_id, max_message_id) -> the Telegram messages we posted
+# for it, so a later MAX edit/delete/reaction can find and mirror them. Bounded
+# and in-memory (like _reply_map), so it covers messages from the current
+# session — an edit to a message forwarded before a restart is a graceful no-op.
+FORWARD_MAP_LIMIT = 10000
 NAME_CACHE_LIMIT = 5000
 # Bounded dedup of forwarded (chat_id, message_id) so a MAX reconnect replay
 # can't double-post a message.
@@ -41,6 +53,11 @@ MEDIA_CONCURRENCY = 8
 TELEGRAM_UPLOAD_LIMIT = 49 * 1024 * 1024
 ATTACH_DEBUG_LOG = Path(__file__).parent / "attaches.log"
 ATTACH_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
+# Capped, owner-locked capture of edit/delete/reaction push frames so the
+# reverse-engineered (partly inferred) payload shapes can be confirmed against
+# real data. Frames hold message text/ids, so it is size-capped and ACL-locked.
+EVENT_DEBUG_LOG = Path(__file__).parent / "events.log"
+EVENT_FRAME_MAX_CHARS = 20000
 # Session watchdog: poll the live MAX session this often, and treat total silence
 # (no frames at all, including the 30s keepalive replies) for this long as a
 # half-open TCP hang that wait_closed() would never wake from — force a reconnect.
@@ -131,6 +148,24 @@ def _log_raw_attaches(message: dict) -> None:
             return
         with ATTACH_DEBUG_LOG.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(message.get("attaches"), ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _log_event_frame(packet: dict) -> None:
+    """Append an edit/delete/reaction push frame to a capped log, so the partly-
+    inferred payload shapes can be verified against real frames. Owner-locked
+    and size-capped because frames hold message text and ids."""
+    try:
+        if (EVENT_DEBUG_LOG.exists()
+                and EVENT_DEBUG_LOG.stat().st_size > ATTACH_DEBUG_LOG_MAX_BYTES):
+            return
+        line = json.dumps(
+            {"opcode": packet.get("opcode"), "payload": packet.get("payload")},
+            ensure_ascii=False,
+        )[:EVENT_FRAME_MAX_CHARS]
+        with EVENT_DEBUG_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
     except OSError:
         pass
 
@@ -242,6 +277,11 @@ class MaxToTelegramBridge:
         self._state = BridgeState()
         # telegram message_id -> {"chat_id", "message_id", "sender"}
         self._reply_map: "OrderedDict[int, dict]" = OrderedDict()
+        # (max_chat_id, str(max_message_id)) -> [ {"chat_id","message_id","role"} ]
+        # of the Telegram messages posted for that MAX message (role: "text" =
+        # editMessageText body, "caption" = editMessageCaption media, "media" =
+        # no editable text). Used to mirror MAX edits/deletes/reactions.
+        self._forward_map: "OrderedDict[tuple, list]" = OrderedDict()
         # Per-MAX-chat locks serialize topic creation so two concurrent packets
         # from a brand-new chat cannot create duplicate Telegram topics.
         self._topic_locks: "dict[str, asyncio.Lock]" = {}
@@ -255,18 +295,42 @@ class MaxToTelegramBridge:
 
     def _remember(self, tg_message_id: int | None, max_chat_id, max_message_id,
                   sender: str, telegram_chat_id=None,
-                  message_thread_id: int | None = None) -> None:
+                  message_thread_id: int | None = None,
+                  role: str = "text") -> None:
         if not tg_message_id:
             return
+        telegram_chat_id = telegram_chat_id or self._fallback_chat_id
         self._reply_map[tg_message_id] = {
             "chat_id": max_chat_id,
             "message_id": max_message_id,
             "sender": sender,
-            "telegram_chat_id": telegram_chat_id or self._fallback_chat_id,
+            "telegram_chat_id": telegram_chat_id,
             "message_thread_id": message_thread_id,
         }
         while len(self._reply_map) > REPLY_MAP_LIMIT:
             self._reply_map.popitem(last=False)
+        self._remember_forward(max_chat_id, max_message_id, telegram_chat_id,
+                               tg_message_id, role)
+
+    def _remember_forward(self, max_chat_id, max_message_id, telegram_chat_id,
+                          tg_message_id, role: str) -> None:
+        """Record a Telegram message posted for a MAX message, so a later edit/
+        delete/reaction on that MAX message can find and mirror it."""
+        if tg_message_id is None or max_message_id is None:
+            return
+        key = (max_chat_id, str(max_message_id))
+        record = self._forward_map.get(key)
+        if record is None:
+            record = []
+            self._forward_map[key] = record
+        record.append({
+            "chat_id": telegram_chat_id,
+            "message_id": tg_message_id,
+            "role": role,
+        })
+        self._forward_map.move_to_end(key)
+        while len(self._forward_map) > FORWARD_MAP_LIMIT:
+            self._forward_map.popitem(last=False)
 
     async def _resolve_sender_name(self, client: MaxClient, sender_id: int) -> str:
         if sender_id in self._name_cache:
@@ -624,51 +688,192 @@ class MaxToTelegramBridge:
         # the handler robust to any caller.
         if not isinstance(packet, dict):
             return
-        if packet.get("opcode") != INCOMING_MESSAGE_OPCODE:
+        opcode = packet.get("opcode")
+        try:
+            if opcode == INCOMING_MESSAGE_OPCODE:
+                if self._forward_sem is None:
+                    self._forward_sem = asyncio.Semaphore(MEDIA_CONCURRENCY)
+                async with self._forward_sem:
+                    await self._handle_incoming_message(client, packet)
+            elif opcode in DELETE_OPCODES:
+                await self._handle_delete_event(packet)
+            elif opcode in REACTION_OPCODES:
+                await self._handle_reaction_event(packet)
+        except Exception:
+            _logger.exception("Failed to handle packet (opcode %s)", opcode)
+
+    async def _handle_incoming_message(self, client: MaxClient, packet: dict) -> None:
+        chat_id = None
+        try:
+            payload = packet.get("payload", {})
+            message = payload.get("message", {})
+            sender_id = message.get("sender")
+            if sender_id is not None and sender_id == self._own_id:
+                return  # our own outgoing message echoed back
+
+            chat_id = payload.get("chatId")
+            max_message_id = message.get("id")
+            key = ((chat_id, str(max_message_id))
+                   if max_message_id is not None else None)
+            # An edit re-arrives as opcode 128 reusing the original id, marked
+            # status=EDITED. Detect it BEFORE dedup (which would drop it as a
+            # replay) and mirror it onto the Telegram message(s) we already sent.
+            # If we never saw the original (edited before we connected), fall
+            # through and forward it as a new message so the content isn't lost.
+            status = str(message.get("status") or "").upper()
+            if (status == EDITED_STATUS and key is not None
+                    and key in self._seen_messages):
+                await self._mirror_edit(client, chat_id, max_message_id, message)
+                return
+            if key is not None:
+                if key in self._seen_messages:
+                    return  # already forwarded (e.g. MAX replayed on reconnect)
+                self._seen_messages[key] = None
+                while len(self._seen_messages) > SEEN_MESSAGES_LIMIT:
+                    self._seen_messages.popitem(last=False)
+            if message.get("attaches"):
+                _log_raw_attaches(message)
+            text, parsed = _message_content(message)
+
+            sender = (await self._resolve_sender_name(client, sender_id)
+                      if isinstance(sender_id, int) else "неизвестный отправитель")
+            chat_title, chat_type = self._extract_chat_meta(payload, sender)
+            header = f"MAX | {sender} (чат {chat_id})"
+
+            await self._forward(client, header, text, parsed,
+                                chat_id, max_message_id, sender,
+                                chat_title, chat_type)
+            _logger.info("Forwarded from %s (chat %s, %d attach)",
+                         sender, chat_id, len(parsed))
+        except Exception as exc:
+            if "thread not found" in str(exc).lower() and chat_id is not None:
+                # Topic was deleted in Telegram — forget it so the next message
+                # from this chat recreates a fresh topic.
+                self._state.delete_topic(chat_id)
+                _logger.warning("Dropped stale topic for chat %s (Telegram "
+                                "thread deleted); it will be recreated.", chat_id)
+            else:
+                _logger.exception("Failed to handle packet: %s", packet)
+
+    # --- MAX edits / deletes / reactions -> Telegram -------------------------
+
+    def _render_text_body(self, in_topic: bool, is_channel: bool, sender: str,
+                          header: str, text: str, notes: list) -> str:
+        """The leading text body for a forwarded message — identical shape for a
+        fresh forward and for an edit, so an edit re-renders to the same form."""
+        if in_topic:
+            return self._topic_body(sender, text, notes, is_channel)
+        return "\n".join(part for part in [header, text, *notes] if part) or header
+
+    async def _mirror_edit(self, client: MaxClient, max_chat_id,
+                           max_message_id, message: dict) -> None:
+        """Mirror a MAX message edit onto the Telegram message(s) posted for it."""
+        record = self._forward_map.get((max_chat_id, str(max_message_id)))
+        if not record:
+            return  # not forwarded (e.g. before a restart) — nothing to update
+        primary = next((e for e in record if e["role"] in ("text", "caption")), None)
+        if primary is None:
+            return  # media-only with no caption: nothing textual to mirror
+        text, parsed = _message_content(message)
+        resolvable = {"file_resolve", "video_resolve"}
+        notes = [p.text for p in parsed
+                 if p.kind not in _MEDIA_SENDERS and p.kind not in resolvable]
+        sender = await self._message_sender_name(client, message.get("sender"))
+        topic = self._state.get_topic(max_chat_id) or {}
+        in_topic = bool(self._topics_enabled and topic)
+        is_channel = topic.get("chat_type") == "channel"
+        header = f"MAX | {sender} (чат {max_chat_id})"
+        body = self._render_text_body(in_topic, is_channel, sender, header,
+                                      text, notes)
+        try:
+            if primary["role"] == "text":
+                await asyncio.to_thread(
+                    tg.edit_message_text, self._token,
+                    primary["chat_id"], primary["message_id"], body)
+            else:  # an edited caption on a media-only message
+                await asyncio.to_thread(
+                    tg.edit_message_caption, self._token,
+                    primary["chat_id"], primary["message_id"], body)
+        except Exception as exc:
+            if "not modified" in str(exc).lower():
+                return  # re-render identical to current — a harmless no-op
+            _logger.info("Could not mirror edit for MAX msg %s: %s",
+                         max_message_id, exc)
+
+    async def _handle_delete_event(self, packet: dict) -> None:
+        _log_event_frame(packet)  # capture to confirm the inferred delete shape
+        payload = packet.get("payload")
+        if not isinstance(payload, dict):
             return
-        if self._forward_sem is None:
-            self._forward_sem = asyncio.Semaphore(MEDIA_CONCURRENCY)
-        async with self._forward_sem:
-            chat_id = None
-            try:
-                payload = packet.get("payload", {})
-                message = payload.get("message", {})
-                sender_id = message.get("sender")
-                if sender_id is not None and sender_id == self._own_id:
-                    return  # our own outgoing message echoed back
+        chat_id = payload.get("chatId")
+        ids = payload.get("messageIds")
+        if ids is None and payload.get("messageId") is not None:
+            ids = [payload.get("messageId")]
+        if not isinstance(ids, list) or not ids:
+            return  # range-delete (140) or unknown shape — captured above
+        await self._mirror_delete(chat_id, ids)
 
-                chat_id = payload.get("chatId")
-                max_message_id = message.get("id")
-                if max_message_id is not None:
-                    key = (chat_id, str(max_message_id))
-                    if key in self._seen_messages:
-                        return  # already forwarded (e.g. MAX replayed on reconnect)
-                    self._seen_messages[key] = None
-                    while len(self._seen_messages) > SEEN_MESSAGES_LIMIT:
-                        self._seen_messages.popitem(last=False)
-                if message.get("attaches"):
-                    _log_raw_attaches(message)
-                text, parsed = _message_content(message)
+    async def _mirror_delete(self, max_chat_id, max_message_ids: list) -> None:
+        """Delete every Telegram message posted for the given MAX message(s)."""
+        for raw_id in max_message_ids:
+            record = self._forward_map.pop((max_chat_id, str(raw_id)), None)
+            if not record:
+                continue
+            for entry in record:
+                try:
+                    await asyncio.to_thread(
+                        tg.delete_message, self._token,
+                        entry["chat_id"], entry["message_id"])
+                except Exception as exc:
+                    _logger.info("Could not delete mirrored TG message %s: %s",
+                                 entry.get("message_id"), exc)
 
-                sender = (await self._resolve_sender_name(client, sender_id)
-                          if isinstance(sender_id, int) else "неизвестный отправитель")
-                chat_title, chat_type = self._extract_chat_meta(payload, sender)
-                header = f"MAX | {sender} (чат {chat_id})"
+    @staticmethod
+    def _top_reaction(counters) -> str | None:
+        """The most-used emoji from an aggregate counters list, or None when the
+        set is empty (which clears the mirrored Telegram reaction)."""
+        best, best_count = None, -1
+        if isinstance(counters, list):
+            for counter in counters:
+                if not isinstance(counter, dict):
+                    continue
+                emoji = counter.get("reaction")
+                count = counter.get("count") or 0
+                if emoji and count > best_count:
+                    best, best_count = emoji, count
+        return best
 
-                await self._forward(client, header, text, parsed,
-                                    chat_id, max_message_id, sender,
-                                    chat_title, chat_type)
-                _logger.info("Forwarded from %s (chat %s, %d attach)",
-                             sender, chat_id, len(parsed))
-            except Exception as exc:
-                if "thread not found" in str(exc).lower() and chat_id is not None:
-                    # Topic was deleted in Telegram — forget it so the next message
-                    # from this chat recreates a fresh topic.
-                    self._state.delete_topic(chat_id)
-                    _logger.warning("Dropped stale topic for chat %s (Telegram "
-                                    "thread deleted); it will be recreated.", chat_id)
-                else:
-                    _logger.exception("Failed to handle packet: %s", packet)
+    async def _handle_reaction_event(self, packet: dict) -> None:
+        _log_event_frame(packet)  # capture to confirm the inferred reaction shape
+        payload = packet.get("payload")
+        if not isinstance(payload, dict):
+            return
+        chat_id = payload.get("chatId")
+        message_id = payload.get("messageId")
+        if message_id is None:
+            return
+        # 156 nests under reactionInfo; 155 carries the same fields flat.
+        info = payload.get("reactionInfo")
+        if not isinstance(info, dict):
+            info = payload
+        await self._mirror_reaction(chat_id, message_id,
+                                    self._top_reaction(info.get("counters")))
+
+    async def _mirror_reaction(self, max_chat_id, max_message_id,
+                               emoji: str | None) -> None:
+        """Set (or clear) the bot's reaction on the head Telegram message we
+        posted for a MAX message, reflecting MAX's current top reaction."""
+        record = self._forward_map.get((max_chat_id, str(max_message_id)))
+        if not record:
+            return
+        target = record[0]  # the head (first-posted) message of the mirror
+        try:
+            await asyncio.to_thread(
+                tg.set_message_reaction, self._token,
+                target["chat_id"], target["message_id"], emoji)
+        except Exception as exc:
+            _logger.info("Could not mirror reaction %r on MAX msg %s: %s",
+                         emoji, max_message_id, exc)
 
     async def _forward(self, client, header, text, parsed,
                        chat_id, max_message_id, sender, chat_title, chat_type):
@@ -689,9 +894,8 @@ class MaxToTelegramBridge:
         header_sent = False
         # A leading text message when there is text, notes, or nothing else.
         if text or notes or (not media and not to_resolve):
-            body = (self._topic_body(sender, text, notes, is_channel)
-                    if in_topic else
-                    ("\n".join(part for part in [header, text, *notes] if part) or header))
+            body = self._render_text_body(in_topic, is_channel, sender, header,
+                                          text, notes)
             msg_id = await asyncio.to_thread(tg.send_message, self._token,
                                              telegram_chat_id, body,
                                              message_thread_id=thread_id)
@@ -727,6 +931,7 @@ class MaxToTelegramBridge:
                    else (self._topic_caption(sender, item.text, is_channel) if in_topic
                          else self._caption(header, header_sent, item.text)))
         sender_fn, supports_caption = _MEDIA_SENDERS[item.kind]
+        role = "caption" if supports_caption else "media"
         try:
             if supports_caption:
                 msg_id = await asyncio.to_thread(
@@ -741,8 +946,9 @@ class MaxToTelegramBridge:
             msg_id = await self._send_note(
                 telegram_chat_id, f"{caption} [не удалось переслать медиа]",
                 thread_id)
+            role = "media"  # fell back to a plain note, not editable media
         self._remember(msg_id, chat_id, max_message_id, sender,
-                       telegram_chat_id, thread_id)
+                       telegram_chat_id, thread_id, role)
         return True
 
     async def _send_resolved_item(self, item, header_sent, ctx) -> bool:
@@ -758,8 +964,9 @@ class MaxToTelegramBridge:
                 f"{caption} [слишком большой для Telegram] — открыть в MAX",
                 message_thread_id=thread_id)
             self._remember(msg_id, chat_id, max_message_id, sender,
-                           telegram_chat_id, thread_id)
+                           telegram_chat_id, thread_id, "media")
             return True
+        role = "caption"
         try:
             if item.kind == "file_resolve":
                 url = await mediamax.resolve_file_url(
@@ -777,8 +984,9 @@ class MaxToTelegramBridge:
             _logger.warning("Failed to resolve/send %s: %s", item.kind, exc)
             msg_id = await self._send_note(
                 telegram_chat_id, f"{caption} — открыть в MAX", thread_id)
+            role = "media"  # fell back to a plain note, not editable media
         self._remember(msg_id, chat_id, max_message_id, sender,
-                       telegram_chat_id, thread_id)
+                       telegram_chat_id, thread_id, role)
         return True
 
     # --- Telegram -> MAX -----------------------------------------------------
@@ -1192,7 +1400,7 @@ class MaxToTelegramBridge:
         """Best-effort lock local state/debug files to the owner: state.json maps
         the conversation graph and attaches.log can hold signed CDN URLs.
         (bridge.log is locked separately in main._configure.)"""
-        for path in (self._state.path, ATTACH_DEBUG_LOG):
+        for path in (self._state.path, ATTACH_DEBUG_LOG, EVENT_DEBUG_LOG):
             try:
                 if path.exists():
                     restrict_to_owner(path)

@@ -722,5 +722,218 @@ class TgHelperTests(unittest.TestCase):
         self.assertGreater(captured["timeout"][1], captured["poll"])
 
 
+class TgMutationTests(unittest.TestCase):
+    def test_edit_message_text_empty_is_noop(self):
+        import tg
+        with patch("tg._call") as call:
+            self.assertFalse(tg.edit_message_text("tok", 1, 2, ""))
+        call.assert_not_called()
+
+    def test_edit_message_text_calls_api(self):
+        import tg
+        with patch("tg._call") as call:
+            self.assertTrue(tg.edit_message_text("tok", -100, 5, "новый"))
+        self.assertEqual(call.call_args.args[1], "editMessageText")
+        self.assertEqual(call.call_args.kwargs["message_id"], 5)
+        self.assertEqual(call.call_args.kwargs["text"], "новый")
+
+    def test_delete_message_calls_api(self):
+        import tg
+        with patch("tg._call", return_value=True) as call:
+            self.assertTrue(tg.delete_message("tok", -100, 5))
+        self.assertEqual(call.call_args.args[1], "deleteMessage")
+        self.assertEqual(call.call_args.kwargs["message_id"], 5)
+
+    def test_set_message_reaction_wraps_emoji(self):
+        import tg
+        with patch("tg._call") as call:
+            tg.set_message_reaction("tok", -100, 5, "👍")
+        self.assertEqual(call.call_args.kwargs["reaction"],
+                         [{"type": "emoji", "emoji": "👍"}])
+
+    def test_set_message_reaction_none_clears(self):
+        import tg
+        with patch("tg._call") as call:
+            tg.set_message_reaction("tok", -100, 5, None)
+        self.assertEqual(call.call_args.kwargs["reaction"], [])
+
+
+class ForwardMapTests(unittest.TestCase):
+    def make_bridge(self):
+        return MaxToTelegramBridge({
+            "telegram_bot_token": "token",
+            "telegram_chat_id": 111,
+            "telegram_fallback_chat_id": 111,
+            "telegram_forum_chat_id": -100222,
+            "telegram_topics_enabled": True,
+            "max_login_token": "max",
+        })
+
+    def test_remember_feeds_both_maps(self):
+        bridge = self.make_bridge()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        # reverse (reply) map: TG id -> MAX message
+        self.assertEqual(bridge._reply_map[500]["message_id"], "m1")
+        # forward map: MAX message -> TG messages
+        record = bridge._forward_map[(555, "m1")]
+        self.assertEqual(record[0]["message_id"], 500)
+        self.assertEqual(record[0]["role"], "text")
+
+    def test_forward_map_accumulates_in_post_order(self):
+        bridge = self.make_bridge()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        bridge._remember(501, 555, "m1", "Alice", -100222, 42, "caption")
+        record = bridge._forward_map[(555, "m1")]
+        self.assertEqual([e["message_id"] for e in record], [500, 501])
+
+    def test_forward_map_is_bounded(self):
+        bridge = self.make_bridge()
+        with patch("bridge.FORWARD_MAP_LIMIT", 3):
+            for i in range(6):
+                bridge._remember(600 + i, 555, f"m{i}", "A", -100222, 42, "text")
+        self.assertLessEqual(len(bridge._forward_map), 3)
+
+
+class MirrorTests(unittest.IsolatedAsyncioTestCase):
+    def make_bridge(self):
+        return MaxToTelegramBridge({
+            "telegram_bot_token": "token",
+            "telegram_chat_id": 111,
+            "telegram_fallback_chat_id": 111,
+            "telegram_forum_chat_id": -100222,
+            "telegram_topics_enabled": True,
+            "max_login_token": "max",
+        })
+
+    async def test_mirror_edit_updates_text_body(self):
+        bridge = self.make_bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            bridge._state.save_topic(555, thread_id=42, title="Alice",
+                                     chat_type="dialog")
+            bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+            message = {"id": "m1", "sender": 7, "text": "исправлено",
+                       "status": "EDITED"}
+            with patch.object(bridge, "_message_sender_name",
+                              new=AsyncMock(return_value="Alice")), \
+                    patch("bridge.tg.edit_message_text") as edit:
+                await bridge._mirror_edit(object(), 555, "m1", message)
+            edit.assert_called_once()
+            self.assertEqual(edit.call_args.args[2], 500)       # TG message id
+            self.assertIn("исправлено", edit.call_args.args[3])  # new body
+            self.assertIn("Alice:", edit.call_args.args[3])      # sender prefix
+
+    async def test_mirror_edit_noop_when_not_forwarded(self):
+        bridge = self.make_bridge()
+        with patch("bridge.tg.edit_message_text") as edit:
+            await bridge._mirror_edit(
+                object(), 555, "ghost",
+                {"text": "x", "status": "EDITED", "sender": 7})
+        edit.assert_not_called()
+
+    async def test_mirror_edit_swallows_not_modified(self):
+        bridge = self.make_bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge._state = BridgeState(Path(tmp) / "state.json")
+            bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+            err = RuntimeError("Telegram API editMessageText failed: "
+                               "{'description': 'Bad Request: message is not modified'}")
+            with patch.object(bridge, "_message_sender_name",
+                              new=AsyncMock(return_value="Alice")), \
+                    patch("bridge.tg.edit_message_text", side_effect=err):
+                # Must not raise: re-rendering identical content is a no-op.
+                await bridge._mirror_edit(
+                    object(), 555, "m1",
+                    {"id": "m1", "sender": 7, "text": "x", "status": "EDITED"})
+
+    async def test_mirror_delete_removes_all_and_forgets(self):
+        bridge = self.make_bridge()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        bridge._remember(501, 555, "m1", "Alice", -100222, 42, "caption")
+        deleted = []
+        with patch("bridge.tg.delete_message",
+                   side_effect=lambda _t, _c, mid: deleted.append(mid)):
+            await bridge._mirror_delete(555, ["m1"])
+        self.assertEqual(sorted(deleted), [500, 501])
+        self.assertNotIn((555, "m1"), bridge._forward_map)
+
+    async def test_mirror_reaction_targets_head_message(self):
+        bridge = self.make_bridge()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        bridge._remember(501, 555, "m1", "Alice", -100222, 42, "caption")
+        with patch("bridge.tg.set_message_reaction") as react:
+            await bridge._mirror_reaction(555, "m1", "👍")
+        react.assert_called_once()
+        self.assertEqual(react.call_args.args[2], 500)  # head (first-posted) msg
+        self.assertEqual(react.call_args.args[3], "👍")
+
+    def test_top_reaction_picks_highest_then_none_when_empty(self):
+        self.assertEqual(
+            MaxToTelegramBridge._top_reaction(
+                [{"reaction": "👍", "count": 1}, {"reaction": "😍", "count": 3}]),
+            "😍")
+        self.assertIsNone(MaxToTelegramBridge._top_reaction([]))
+
+    async def test_on_packet_routes_delete(self):
+        bridge = self.make_bridge()
+        client = object()
+        bridge._client = client
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        with patch("bridge._log_event_frame"), \
+                patch("bridge.tg.delete_message", return_value=True) as delete:
+            await bridge._on_packet(client, {"opcode": 142, "payload": {
+                "chatId": 555, "messageIds": ["m1"]}})
+        delete.assert_called_once()
+
+    async def test_on_packet_routes_reaction(self):
+        bridge = self.make_bridge()
+        client = object()
+        bridge._client = client
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        with patch("bridge._log_event_frame"), \
+                patch("bridge.tg.set_message_reaction") as react:
+            await bridge._on_packet(client, {"opcode": 156, "payload": {
+                "chatId": 555, "messageId": "m1",
+                "reactionInfo": {"counters": [{"reaction": "🔥", "count": 2}],
+                                 "totalCount": 2}}})
+        react.assert_called_once()
+        self.assertEqual(react.call_args.args[3], "🔥")
+
+    async def test_on_packet_edit_mirrors_and_does_not_reforward(self):
+        # EDITED status on an already-seen message -> mirror as an edit, NOT a
+        # second forward.
+        bridge = self.make_bridge()
+        client = object()
+        bridge._client = client
+        bridge._own_id = 999
+        bridge._seen_messages[(555, "m1")] = None
+        with patch.object(bridge, "_mirror_edit", new=AsyncMock()) as mirror, \
+                patch.object(bridge, "_forward", new=AsyncMock()) as fwd:
+            await bridge._on_packet(client, {"opcode": 128, "payload": {
+                "chatId": 555,
+                "message": {"id": "m1", "sender": 7, "text": "ред",
+                            "status": "EDITED"}}})
+        mirror.assert_awaited_once()
+        fwd.assert_not_awaited()
+
+    async def test_on_packet_edit_of_unseen_message_is_forwarded(self):
+        # An EDITED message we never saw (edited before connect) must be
+        # forwarded as new, not silently dropped.
+        bridge = self.make_bridge()
+        client = object()
+        bridge._client = client
+        bridge._own_id = 999
+        with patch.object(bridge, "_mirror_edit", new=AsyncMock()) as mirror, \
+                patch.object(bridge, "_forward", new=AsyncMock()) as fwd, \
+                patch.object(bridge, "_resolve_sender_name",
+                             new=AsyncMock(return_value="A")):
+            await bridge._on_packet(client, {"opcode": 128, "payload": {
+                "chatId": 555,
+                "message": {"id": "m9", "sender": 7, "text": "x",
+                            "status": "EDITED"}}})
+        mirror.assert_not_awaited()
+        fwd.assert_awaited_once()
+
+
 if __name__ == "__main__":
     unittest.main()
