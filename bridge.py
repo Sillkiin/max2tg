@@ -20,6 +20,7 @@ import attaches
 import maxactions
 import mediamax
 import tg
+from fileperms import restrict_to_owner
 from max_client import BrowserMaxClient, MaxAuthError
 from state import BridgeState, normalize_topic_title
 
@@ -40,6 +41,11 @@ MEDIA_CONCURRENCY = 8
 TELEGRAM_UPLOAD_LIMIT = 49 * 1024 * 1024
 ATTACH_DEBUG_LOG = Path(__file__).parent / "attaches.log"
 ATTACH_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
+# Session watchdog: poll the live MAX session this often, and treat total silence
+# (no frames at all, including the 30s keepalive replies) for this long as a
+# half-open TCP hang that wait_closed() would never wake from — force a reconnect.
+SESSION_WATCH_INTERVAL = 30
+MAX_SILENCE_SECONDS = 180
 
 # Owner-only Telegram commands to drive MAX (join chats, find people, start DMs).
 _HELP_TEXT = (
@@ -129,26 +135,84 @@ def _log_raw_attaches(message: dict) -> None:
         pass
 
 
+# Replied-to/quoted preview length in a reply header.
+_QUOTE_SNIPPET_MAX = 120
+# How deep to follow nested forwards/replies before giving up.
+_UNWRAP_MAX_DEPTH = 4
+
+
+def _forward_prefix(link: dict) -> str:
+    src = (link.get("chatName") or "").strip()
+    return f"↪️ Переслано из «{src}»" if src else "↪️ Переслано"
+
+
+def _unwrap_inner(inner: dict, depth: int = 0) -> tuple[str, list]:
+    """(text, parsed attaches) of a forwarded/quoted inner message, descending
+    through nested forwards/replies to the innermost message that has content."""
+    text = (inner.get("text") or "").strip()
+    parsed = attaches.parse(inner)
+    if inner.get("attaches"):
+        _log_raw_attaches(inner)  # capture forwarded media structure
+    if not text and not parsed and depth < _UNWRAP_MAX_DEPTH:
+        nested = inner.get("link")
+        if isinstance(nested, dict) and isinstance(nested.get("message"), dict):
+            return _unwrap_inner(nested["message"], depth + 1)
+    return text, parsed
+
+
+def _quote_snippet(inner: dict) -> str:
+    """A compact one-line preview of a replied-to message for a quote header."""
+    text = (inner.get("text") or "").strip()
+    if not text:
+        parsed = attaches.parse(inner)
+        if parsed and parsed[0].text:
+            text = parsed[0].text.splitlines()[0]
+    text = " ".join(text.split())
+    if len(text) > _QUOTE_SNIPPET_MAX:
+        text = text[:_QUOTE_SNIPPET_MAX - 1].rstrip() + "…"
+    return text
+
+
 def _message_content(message: dict) -> tuple[str, list]:
-    """Effective (text, parsed attaches) for an incoming message. A FORWARD (or a
-    REPLY with no own body) carries its content in `message.link.message`, not at
-    the top level — unwrap it so it doesn't render as an empty "Отправитель:"."""
+    """Effective (text, parsed attaches) for an incoming message.
+
+    A FORWARD (or a REPLY with no own body) carries its content in
+    `message.link.message`, not at the top level — unwrap it (recursively, for
+    nested forwards) so it doesn't render as an empty "Отправитель:". A REPLY
+    that has its own body keeps it, prefixed with a short quote of what it
+    replied to.
+    """
     text = (message.get("text") or "").strip()
     parsed = attaches.parse(message)
     link = message.get("link")
-    if (isinstance(link, dict) and isinstance(link.get("message"), dict)
-            and not text and not parsed):
-        inner = link["message"]
-        if (link.get("type") or "").upper() == "FORWARD":
-            src = (link.get("chatName") or "").strip()
-            prefix = f"↪️ Переслано из «{src}»" if src else "↪️ Переслано"
-        else:
+    if not (isinstance(link, dict) and isinstance(link.get("message"), dict)):
+        return text, parsed
+
+    link_type = (link.get("type") or "").upper()
+    inner = link["message"]
+
+    if link_type == "REPLY" and (text or parsed):
+        # Reply with its own content: keep it, prefix a short quote of the original.
+        snippet = _quote_snippet(inner)
+        header = f"↩️ В ответ на: «{snippet}»" if snippet else "↩️ В ответ"
+        text = f"{header}\n{text}" if text else header
+        return text, parsed
+
+    if not text and not parsed:
+        # A forward, or a reply that only quotes: surface the inner content.
+        inner_text, parsed = _unwrap_inner(inner)
+        if link_type == "FORWARD":
+            prefix = _forward_prefix(link)
+        elif link_type == "REPLY":
             prefix = "↩️ Ответ"
-        inner_text = (inner.get("text") or "").strip()
-        text = f"{prefix}:\n{inner_text}" if inner_text else prefix
-        parsed = attaches.parse(inner)
-        if inner.get("attaches"):
-            _log_raw_attaches(inner)  # capture forwarded media structure
+        else:
+            prefix = ""
+        if prefix:
+            text = f"{prefix}:\n{inner_text}" if inner_text else prefix
+        else:
+            text = inner_text
+        return text, parsed
+
     return text, parsed
 
 
@@ -1042,6 +1106,29 @@ class MaxToTelegramBridge:
 
     # --- MAX session lifecycle ----------------------------------------------
 
+    async def _await_session_end(self, client: BrowserMaxClient) -> None:
+        """Block until MAX closes the connection, or force a reconnect if the
+        socket goes silent (no frames for MAX_SILENCE_SECONDS) — a half-open TCP
+        hang that wait_closed() alone would never wake from."""
+        closed = asyncio.ensure_future(client.wait_closed())
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    {closed}, timeout=SESSION_WATCH_INTERVAL)
+                if closed in done:
+                    return
+                idle = client.seconds_since_last_frame()
+                if idle is not None and idle > MAX_SILENCE_SECONDS:
+                    _logger.warning("MAX silent for %.0fs — forcing reconnect.", idle)
+                    return
+        finally:
+            if not closed.done():
+                closed.cancel()
+                try:
+                    await closed
+                except (asyncio.CancelledError, Exception):
+                    pass
+
     async def _run_session(self) -> None:
         client = BrowserMaxClient()
         await client.connect()
@@ -1064,7 +1151,7 @@ class MaxToTelegramBridge:
                 print("Мост запущен. Сообщения MAX идут в темы Telegram; ответы — в теме или через Reply.")
             else:
                 print("Мост запущен. Сообщения MAX идут в Telegram; ответы — через Reply.")
-            await client._connection.wait_closed()
+            await self._await_session_end(client)
             _logger.warning("MAX connection closed by server.")
         finally:
             self._client = None
@@ -1101,6 +1188,18 @@ class MaxToTelegramBridge:
             _logger.info("Reconnecting in %s seconds...", delay)
             await asyncio.sleep(delay)
 
+    def _restrict_sensitive_files(self) -> None:
+        """Best-effort lock local state/debug files to the owner: state.json maps
+        the conversation graph and attaches.log can hold signed CDN URLs.
+        (bridge.log is locked separately in main._configure.)"""
+        for path in (self._state.path, ATTACH_DEBUG_LOG):
+            try:
+                if path.exists():
+                    restrict_to_owner(path)
+            except OSError:
+                pass
+
     async def run_forever(self) -> None:
+        self._restrict_sensitive_files()
         await self._register_commands()
         await asyncio.gather(self._max_loop(), self._poll_telegram())

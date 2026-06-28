@@ -118,11 +118,34 @@ class ForwardTests(unittest.TestCase):
                 {"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/x"}]}}})
         self.assertTrue(any(p.kind == "photo" for p in parsed))
 
-    def test_reply_with_own_text_not_unwrapped(self):
-        # A reply that has its own text shows that text (the quote isn't pulled in).
+    def test_reply_with_own_text_gets_quote_header(self):
+        # A reply keeps its own text and gets a compact quote of the original.
         text, _parsed = _message_content({"text": "мой ответ", "attaches": [], "link": {
             "type": "REPLY", "message": {"text": "оригинал"}}})
-        self.assertEqual(text, "мой ответ")
+        self.assertIn("мой ответ", text)
+        self.assertIn("оригинал", text)
+        self.assertIn("ответ на", text.lower())
+
+    def test_forwarded_file_unwrapped_to_file_resolve(self):
+        # A forwarded document with no direct url -> file_resolve (resolved later
+        # via the forward's own chat/message ids, the same path video uses).
+        _text, parsed = _message_content({"text": "", "attaches": [], "link": {
+            "type": "FORWARD", "message": {"id": "2", "text": "", "attaches": [
+                {"_type": "FILE", "fileId": 555, "name": "doc.pdf", "size": 10}]}}})
+        self.assertTrue(
+            any(p.kind == "file_resolve" and p.file_id == 555 for p in parsed))
+
+    def test_nested_forward_unwrapped_to_innermost(self):
+        # A forward whose inner message is itself a forward carrying a photo:
+        # descend to the innermost content instead of rendering empty.
+        inner = {"id": "3", "text": "", "attaches": [], "link": {
+            "type": "FORWARD", "message": {"id": "4", "text": "глубокий текст",
+                "attaches": [{"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/y"}]}}}
+        text, parsed = _message_content({"text": "", "attaches": [], "link": {
+            "type": "FORWARD", "chatName": "Канал", "message": inner}})
+        self.assertIn("Переслано", text)
+        self.assertIn("глубокий текст", text)
+        self.assertTrue(any(p.kind == "photo" for p in parsed))
 
     def test_normal_message_passthrough(self):
         text, parsed = _message_content({"text": "привет", "attaches": []})
@@ -615,6 +638,19 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("ABCDEFsecret123", out)
         self.assertIn("bot<redacted>", out)
 
+    def test_max_login_token_is_scrubbed(self):
+        import logging
+
+        import main
+        rec = logging.LogRecord(
+            "x", logging.WARNING, "f.py", 1,
+            "login payload {'token': 'maxSecretLoginToken1234567890', 'x': 0}",
+            None, None)
+        main._RedactSecretsFilter().filter(rec)
+        out = rec.getMessage()
+        self.assertNotIn("maxSecretLoginToken1234567890", out)
+        self.assertIn("<redacted>", out)
+
 
 class MaxClientPendingTests(unittest.IsolatedAsyncioTestCase):
     async def test_fail_pending_unblocks_awaiters(self):
@@ -663,6 +699,27 @@ class MaxClientPendingTests(unittest.IsolatedAsyncioTestCase):
         # callback that assumes a dict (would otherwise AttributeError).
         self.assertEqual(len(dispatched), 1)
         self.assertEqual(dispatched[0]["opcode"], 128)
+
+
+class TgHelperTests(unittest.TestCase):
+    def test_send_message_empty_text_returns_none_without_api_call(self):
+        import tg
+        with patch("tg._call") as call:
+            self.assertIsNone(tg.send_message("tok", 1, ""))
+        call.assert_not_called()
+
+    def test_get_updates_read_timeout_outlasts_poll_window(self):
+        import tg
+        captured = {}
+
+        def fake_call(token, method, _timeout=tg.REQUEST_TIMEOUT, **params):
+            captured["timeout"] = _timeout
+            captured["poll"] = params.get("timeout")
+            return []
+
+        with patch("tg._call", side_effect=fake_call):
+            tg.get_updates("tok", None, 25)
+        self.assertGreater(captured["timeout"][1], captured["poll"])
 
 
 if __name__ == "__main__":

@@ -55,9 +55,9 @@ def _assert_public_url(url: str) -> None:
         raise ValueError(f"blocked non-public address: {ip}")
 
 
-def _call(token: str, method: str, **params) -> dict:
+def _call(token: str, method: str, _timeout=REQUEST_TIMEOUT, **params) -> dict:
     url = API_BASE.format(token=token, method=method)
-    response = requests.post(url, json=params, timeout=REQUEST_TIMEOUT)
+    response = requests.post(url, json=params, timeout=_timeout)
     data = response.json()
     if not data.get("ok"):
         raise RuntimeError(f"Telegram API {method} failed: {data}")
@@ -119,7 +119,10 @@ def get_updates(token: str, offset: int | None = None, timeout: int = 25) -> lis
     params = {"timeout": timeout, "allowed_updates": ["message"]}
     if offset is not None:
         params["offset"] = offset
-    return _call(token, "getUpdates", **params)
+    # The HTTP read timeout must outlast the long-poll window (plus server
+    # slack), else every quiet poll raises ReadTimeout and thrashes the backoff.
+    read_timeout = (REQUEST_TIMEOUT[0], timeout + 15)
+    return _call(token, "getUpdates", _timeout=read_timeout, **params)
 
 
 def get_file(token: str, file_id: str) -> dict:
@@ -170,6 +173,8 @@ def send_message(token: str, chat_id: int | str, text: str,
 
     Returns the message_id of the first chunk (used for reply mapping).
     """
+    if not text:
+        return None  # Telegram rejects empty text; avoid a silent no-op send
     first_id: int | None = None
     for start in range(0, len(text), MAX_MESSAGE_LEN):
         chunk = text[start:start + MAX_MESSAGE_LEN]

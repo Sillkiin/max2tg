@@ -53,6 +53,7 @@ class BrowserMaxClient(MaxClient):
         if WS_PROXY:
             connect_kwargs["proxy"] = WS_PROXY
         self._connection = await websockets.connect(WS_HOST, **connect_kwargs)
+        self._last_frame_time = asyncio.get_running_loop().time()
         self._recv_task = asyncio.create_task(self._recv_loop())
         _logger.info("Connected. Receive task started.")
         return self._connection
@@ -64,6 +65,7 @@ class BrowserMaxClient(MaxClient):
         # pipeline (and, since wait_closed() wouldn't return, block reconnect).
         try:
             async for raw in self._connection:
+                self._last_frame_time = asyncio.get_running_loop().time()
                 try:
                     packet = json.loads(raw)
                 except (ValueError, TypeError):
@@ -199,3 +201,17 @@ class BrowserMaxClient(MaxClient):
         if self._connection:
             await self._connection.close()
             self._connection = None
+
+    async def wait_closed(self) -> None:
+        """Wait until the websocket is fully closed (public wrapper so callers
+        don't reach into the private connection object)."""
+        if self._connection is not None:
+            await self._connection.wait_closed()
+
+    def seconds_since_last_frame(self) -> float | None:
+        """Seconds since the last frame of any kind was received, or None if no
+        frame has arrived yet. Used to detect a silent half-open connection."""
+        last = getattr(self, "_last_frame_time", None)
+        if last is None:
+            return None
+        return asyncio.get_running_loop().time() - last

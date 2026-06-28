@@ -1,14 +1,13 @@
 """Entry point: runs first-time setup if needed, then the MAX -> Telegram bridge."""
 import asyncio
 import logging
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 from bridge import MaxToTelegramBridge
 from config import apply_dotenv, load_config
+from fileperms import restrict_to_owner
 from setup_wizard import run_setup
 
 LOG_PATH = Path(__file__).parent / "bridge.log"
@@ -17,6 +16,9 @@ LOG_PATH = Path(__file__).parent / "bridge.log"
 _BOT_TOKEN_RE = re.compile(r"bot\d{5,}:[A-Za-z0-9_-]{20,}")
 _URL_SECRET_RE = re.compile(
     r"([?&](?:token|sig|access_token|key|auth)=)[^&\s'\")]+", re.IGNORECASE)
+# MAX login/auth token in a logged dict/JSON ("token": "<opaque>"): scrub the
+# value. vkmax is already quieted to WARNING; this is defense-in-depth.
+_MAX_TOKEN_RE = re.compile(r"""(['"]token['"]\s*:\s*['"])[^'"]{8,}(['"])""")
 
 
 class _RedactSecretsFilter(logging.Filter):
@@ -31,8 +33,9 @@ class _RedactSecretsFilter(logging.Filter):
             message = record.getMessage()
         except Exception:
             return True
-        redacted = _URL_SECRET_RE.sub(
-            r"\1<redacted>", _BOT_TOKEN_RE.sub("bot<redacted>", message))
+        redacted = _BOT_TOKEN_RE.sub("bot<redacted>", message)
+        redacted = _URL_SECRET_RE.sub(r"\1<redacted>", redacted)
+        redacted = _MAX_TOKEN_RE.sub(r"\1<redacted>\2", redacted)
         if redacted != message:
             record.msg = redacted
             record.args = ()
@@ -41,25 +44,7 @@ class _RedactSecretsFilter(logging.Filter):
 
 def _restrict_log_perms() -> None:
     """Lock bridge.log to the current user (it can hold message content)."""
-    try:
-        if os.name == "nt":
-            user = os.environ.get("USERNAME")
-            if user:
-                # Qualify the principal as DOMAIN\USER. A bare username is
-                # ambiguous when the computer name equals the username: icacls
-                # resolves it to "MACHINE\" (empty account) and, combined with
-                # /inheritance:r, locks the real user out of the file entirely.
-                domain = os.environ.get("USERDOMAIN") or os.environ.get("COMPUTERNAME")
-                principal = f"{domain}\\{user}" if domain else user
-                subprocess.run(
-                    ["icacls", str(LOG_PATH), "/inheritance:r",
-                     "/grant:r", f"{principal}:(R,W)"],
-                    check=False, capture_output=True,
-                )
-        else:
-            LOG_PATH.chmod(0o600)
-    except OSError:
-        pass
+    restrict_to_owner(LOG_PATH)
 
 
 def _configure() -> None:
