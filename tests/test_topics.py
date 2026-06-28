@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from bridge import MaxToTelegramBridge, _contact_display_name
+from bridge import MaxToTelegramBridge, _contact_display_name, _message_content
 from config import normalize_config
 from state import BridgeState, normalize_topic_title
 
@@ -101,6 +101,33 @@ class TopicBodyTests(unittest.TestCase):
         self.assertEqual(
             MaxToTelegramBridge._topic_caption("Иван", "Фото", is_channel=False),
             "Иван:\nФото")
+
+
+class ForwardTests(unittest.TestCase):
+    def test_forwarded_text_unwrapped_from_link(self):
+        text, _parsed = _message_content({"text": "", "attaches": [], "link": {
+            "type": "FORWARD", "chatName": "ПРОПЕЛЛЕР",
+            "message": {"id": "2", "text": "Текст исходного", "attaches": []}}})
+        self.assertIn("Переслано", text)
+        self.assertIn("ПРОПЕЛЛЕР", text)
+        self.assertIn("Текст исходного", text)
+
+    def test_forwarded_media_unwrapped(self):
+        _text, parsed = _message_content({"text": "", "attaches": [], "link": {
+            "type": "FORWARD", "message": {"id": "2", "text": "", "attaches": [
+                {"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/x"}]}}})
+        self.assertTrue(any(p.kind == "photo" for p in parsed))
+
+    def test_reply_with_own_text_not_unwrapped(self):
+        # A reply that has its own text shows that text (the quote isn't pulled in).
+        text, _parsed = _message_content({"text": "мой ответ", "attaches": [], "link": {
+            "type": "REPLY", "message": {"text": "оригинал"}}})
+        self.assertEqual(text, "мой ответ")
+
+    def test_normal_message_passthrough(self):
+        text, parsed = _message_content({"text": "привет", "attaches": []})
+        self.assertEqual(text, "привет")
+        self.assertEqual(parsed, [])
 
 
 class SmartActionTests(unittest.TestCase):

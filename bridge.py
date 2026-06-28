@@ -129,6 +129,27 @@ def _log_raw_attaches(message: dict) -> None:
         pass
 
 
+def _message_content(message: dict) -> tuple[str, list]:
+    """Effective (text, parsed attaches) for an incoming message. A FORWARD (or a
+    REPLY with no own body) carries its content in `message.link.message`, not at
+    the top level — unwrap it so it doesn't render as an empty "Отправитель:"."""
+    text = (message.get("text") or "").strip()
+    parsed = attaches.parse(message)
+    link = message.get("link")
+    if (isinstance(link, dict) and isinstance(link.get("message"), dict)
+            and not text and not parsed):
+        inner = link["message"]
+        if (link.get("type") or "").upper() == "FORWARD":
+            src = (link.get("chatName") or "").strip()
+            prefix = f"↪️ Переслано из «{src}»" if src else "↪️ Переслано"
+        else:
+            prefix = "↩️ Ответ"
+        inner_text = (inner.get("text") or "").strip()
+        text = f"{prefix}:\n{inner_text}" if inner_text else prefix
+        parsed = attaches.parse(inner)
+    return text, parsed
+
+
 class MaxToTelegramBridge:
     def __init__(self, config: dict):
         self._config = config
@@ -475,8 +496,7 @@ class MaxToTelegramBridge:
         if str(topic.get("last_seeded_max_message_id")) == str(message_id):
             return False
 
-        text = (message.get("text") or "").strip()
-        parsed = attaches.parse(message)
+        text, parsed = _message_content(message)
         resolvable = {"file_resolve", "video_resolve"}
         media = [item for item in parsed if item.kind in _MEDIA_SENDERS]
         to_resolve = [item for item in parsed if item.kind in resolvable]
@@ -560,10 +580,9 @@ class MaxToTelegramBridge:
                     self._seen_messages[key] = None
                     while len(self._seen_messages) > SEEN_MESSAGES_LIMIT:
                         self._seen_messages.popitem(last=False)
-                text = (message.get("text") or "").strip()
-                parsed = attaches.parse(message)
                 if message.get("attaches"):
                     _log_raw_attaches(message)
+                text, parsed = _message_content(message)
 
                 sender = (await self._resolve_sender_name(client, sender_id)
                           if isinstance(sender_id, int) else "неизвестный отправитель")
