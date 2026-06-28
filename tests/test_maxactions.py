@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -56,51 +56,6 @@ class JoinTests(unittest.IsolatedAsyncioTestCase):
         client = AsyncMock(invoke_method=AsyncMock(return_value={"payload": {"error": "not.found"}}))
         res = await maxactions.join(client, "@nope")
         self.assertIn("не дал вступить", res.text)
-
-
-class FindTests(unittest.IsolatedAsyncioTestCase):
-    async def test_phone_search_opcode_46(self):
-        client = AsyncMock(invoke_method=AsyncMock(return_value={
-            "payload": {"contact": {"id": 777, "names": [{"name": "Пётр"}]}}}))
-        res = await maxactions.find(client, "+7 999 123-45-67")
-        self.assertIn("Пётр", res.text)
-        self.assertIn("777", res.text)
-        call = client.invoke_method.call_args.kwargs
-        self.assertEqual(call["opcode"], 46)
-        self.assertEqual(call["payload"]["phone"], "+79991234567")
-
-    async def test_phone_bare_8_normalized_to_plus7(self):
-        client = AsyncMock(invoke_method=AsyncMock(return_value={
-            "payload": {"contact": {"id": 5, "names": [{"name": "X"}]}}}))
-        await maxactions.find(client, "89991234567")
-        self.assertEqual(client.invoke_method.call_args.kwargs["payload"]["phone"], "+79991234567")
-
-    async def test_numeric_id_resolves(self):
-        client = AsyncMock()
-        with patch.object(maxactions, "resolve_users",
-                          new=AsyncMock(return_value={"payload": {"contacts": [
-                              {"names": [{"firstName": "Ольга", "lastName": "Лебедева"}]}]}})):
-            res = await maxactions.find(client, "24720322")
-        self.assertIn("Ольга Лебедева", res.text)
-
-    async def test_username_via_opcode_89(self):
-        client = AsyncMock(invoke_method=AsyncMock(
-            return_value={"payload": {"chat": {"id": 555, "title": "Channel"}}}))
-        res = await maxactions.find(client, "@channel")
-        self.assertIn("Channel", res.text)
-        self.assertEqual(client.invoke_method.call_args.kwargs["opcode"], 89)
-
-    async def test_freetext_name_not_wired(self):
-        client = AsyncMock()
-        res = await maxactions.find(client, "департамент культуры Липецк")
-        self.assertIn("названи", res.text.lower())
-        client.invoke_method.assert_not_called()    # must NOT send a guessed opcode
-
-    async def test_overlong_query_rejected(self):
-        client = AsyncMock()
-        res = await maxactions.find(client, "1" * 100)
-        self.assertIn("длинн", res.text.lower())
-        client.invoke_method.assert_not_called()
 
 
 class StartDmTests(unittest.IsolatedAsyncioTestCase):

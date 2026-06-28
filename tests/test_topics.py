@@ -115,14 +115,13 @@ class SmartActionTests(unittest.TestCase):
             MaxToTelegramBridge._smart_action("вступи: max.ru/join/XyZ, спасибо"),
             "/join max.ru/join/XyZ")
 
-    def test_username_becomes_find(self):
+    def test_username_becomes_join(self):
         self.assertEqual(
-            MaxToTelegramBridge._smart_action("@cool_channel"), "/find @cool_channel")
+            MaxToTelegramBridge._smart_action("@cool_channel"), "/join @cool_channel")
 
-    def test_phone_becomes_find(self):
-        self.assertEqual(
-            MaxToTelegramBridge._smart_action("+7 999 123-45-67"),
-            "/find +7 999 123-45-67")
+    def test_phone_is_not_auto_actioned(self):
+        # A bare phone needs text to DM, so it isn't auto-actioned.
+        self.assertIsNone(MaxToTelegramBridge._smart_action("+7 999 123-45-67"))
 
     def test_plain_text_is_ignored(self):
         self.assertIsNone(MaxToTelegramBridge._smart_action("привет, как дела?"))
@@ -324,18 +323,6 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
         # A valid-JSON but non-dict frame must be ignored cleanly, not raise
         # AttributeError out of the fire-and-forget handler task.
         await bridge._on_packet(client, [1, 2, 3])  # must not raise
-
-    async def test_find_command_does_not_remember_dm_target(self):
-        # /find must NOT create a reply_map send-target from a user-supplied id
-        # (a MAX user_id is not a dialog chatId).
-        import maxactions
-        bridge = self.make_bridge()
-        bridge._client = object()
-        result = maxactions.CommandResult("🔍 Нашёл: Пётр\n🆔 id: 777")
-        with patch("bridge.tg.send_message", return_value=42), \
-                patch("bridge.maxactions.find", new=AsyncMock(return_value=result)):
-            await bridge._handle_command(111, None, "/find 777")
-        self.assertNotIn(42, bridge._reply_map)
 
     async def test_help_command_replies(self):
         bridge = self.make_bridge()

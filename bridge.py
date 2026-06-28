@@ -45,27 +45,24 @@ ATTACH_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
 _HELP_TEXT = (
     "🤖 Что я умею\n\n"
     "📥 Пересылаю сюда сообщения из MAX. Ответить — Reply (свайп) на пересланном.\n\n"
-    "➕ Вступить в чат/канал — просто пришлите ссылку (команда не нужна):\n"
-    "   https://max.ru/join/…\n\n"
-    "🔍 Найти человека — пришлите телефон или @ник, получите его id:\n"
-    "   +79991234567   ·   @nickname\n\n"
-    "✍️ Написать человеку — /dm <телефон или id> <текст>:\n"
-    "   /dm +79991234567 привет\n\n"
-    "⌨️ Ещё: /join <ссылка>, /find <телефон|@ник|id>, /help."
+    "👤 Написать ЧЕЛОВЕКУ — /dm <телефон или id> <текст>:\n"
+    "   /dm +79991234567 привет\n"
+    "   (сам найду по номеру и напишу; ответ придёт отдельной темой)\n\n"
+    "📢 Вступить в КАНАЛ/группу/чат — /join <ссылка> (или просто пришлите ссылку):\n"
+    "   /join https://max.ru/join/…\n\n"
+    "ℹ️ Каналы ищутся только по ссылке/@нику — поиск по названию MAX не даёт."
 )
 _WELCOME_TEXT = "👋 Привет! Я зеркалю ваш MAX в Telegram.\n\n" + _HELP_TEXT
 # Registered in Telegram's "/" menu so the commands are discoverable.
 _BOT_COMMANDS = [
-    {"command": "join", "description": "Вступить в канал/группу/чат MAX по ссылке"},
-    {"command": "find", "description": "Найти человека/канал: телефон, @ник, id"},
     {"command": "dm", "description": "Написать человеку: /dm <телефон или id> <текст>"},
+    {"command": "join", "description": "Вступить в канал/чат по ссылке: /join <ссылка>"},
     {"command": "help", "description": "Справка по командам"},
 ]
 
-# Bare-message shortcuts: send a link / phone / @username with no slash command.
+# Bare-message shortcut: a link / @username with no slash command → join it.
 _SMART_MAX_LINK = re.compile(r"\S*max\.ru/\S+", re.IGNORECASE)
 _SMART_USERNAME = re.compile(r"@[A-Za-z0-9_.]{3,32}")
-_SMART_PHONE = re.compile(r"[+]?\d[\d\s()\-]{6,18}")
 
 # kind -> (tg function, supports_caption)
 _MEDIA_SENDERS = {
@@ -882,9 +879,9 @@ class MaxToTelegramBridge:
 
     @staticmethod
     def _smart_action(text: str) -> str | None:
-        """Turn a bare pasted message into a command, so the user can just send a
-        link / phone / @username instead of typing /join or /find. Returns the
-        synthetic command string, or None if nothing actionable matches."""
+        """A bare pasted max.ru link or @username → join that channel/chat (no
+        /join needed). A phone isn't auto-actioned: writing a person also needs
+        text, so that's /dm <phone> <text>. Returns the command, or None."""
         t = (text or "").strip()
         if not t:
             return None
@@ -892,13 +889,11 @@ class MaxToTelegramBridge:
         if link:
             return f"/join {link.group(0).rstrip('.,);')}"
         if _SMART_USERNAME.fullmatch(t):
-            return f"/find {t}"
-        if _SMART_PHONE.fullmatch(t):
-            return f"/find {t}"
+            return f"/join {t}"
         return None
 
     async def _handle_command(self, incoming_chat, thread_id, text: str) -> None:
-        """Owner-only slash commands that drive MAX (join/find/dm). Caller already
+        """Owner-only slash commands that drive MAX (join, dm). Caller already
         verified the message came from an allowed chat."""
         parts = text.strip().split(maxsplit=2)
         cmd = parts[0].lower().lstrip("/").split("@", 1)[0]  # tolerate /cmd@botname
@@ -918,7 +913,7 @@ class MaxToTelegramBridge:
         if cmd == "help":
             await reply(_HELP_TEXT)
             return
-        if cmd not in ("join", "find", "dm"):
+        if cmd not in ("join", "dm"):
             return  # ignore unknown commands silently (could be Telegram's own)
         client = self._client
         if client is None:
@@ -929,14 +924,10 @@ class MaxToTelegramBridge:
                 await reply("Использование: /join <ссылка max.ru/… или @username>")
                 return
             result = await maxactions.join(client, parts[1])
-        elif cmd == "find":
-            if len(parts) < 2:
-                await reply("Использование: /find <+телефон | @ник | id | ссылка>")
-                return
-            result = await maxactions.find(client, " ".join(parts[1:]))
-        else:  # dm
+        else:  # dm — message a person by phone or id
             if len(parts) < 3:
-                await reply("Использование: /dm <id> <текст>")
+                await reply("Использование: /dm <телефон или id> <текст>\n"
+                            "Пример: /dm +79991234567 привет")
                 return
             result = await maxactions.start_dm(client, parts[1], parts[2])
 
@@ -989,8 +980,9 @@ class MaxToTelegramBridge:
             return
         await asyncio.to_thread(
             tg.send_message, self._token, incoming_chat,
-            "ℹ️ Написать в чат MAX — Reply (свайп) на пересланном сообщении.\n"
-            "Вступить в чат/канал — просто пришлите ссылку.",
+            "ℹ️ Ответить в чат MAX — Reply (свайп) на пересланном сообщении.\n"
+            "Написать человеку — /dm <телефон> <текст>.\n"
+            "Вступить в канал — пришлите ссылку или /join <ссылка>.",
             message_thread_id=thread_id)
 
     async def _poll_telegram(self) -> None:

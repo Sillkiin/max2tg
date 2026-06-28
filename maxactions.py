@@ -1,39 +1,31 @@
-"""Telegram-command -> MAX actions: join chats/channels, find people. (/dm pending.)
+"""Telegram-command -> MAX actions: DM people, join channels/chats.
 
-Thin wrappers over the vkmax / MAX opcodes with link parsing and defensive
-response handling, so the bridge can expose /join and /find from Telegram. Every
-public coroutine returns a CommandResult (never raises).
+Thin wrappers over the MAX opcodes with link parsing and defensive response
+handling. Every public coroutine returns a CommandResult (never raises).
 
-Opcodes (vkmax / verified against PyMax MaxTeamAPI):
-  57  join/resolve by link (channels: https://max.ru/<name>; groups: join/<hash>)
-  89  resolve by link (read-only lookup)
-  75  subscribe to a chat
+Opcodes:
+  57  join by link (channels: https://max.ru/<name>; groups: join/<hash>) + 75 subscribe
   46  find contact by phone (CONTACT_INFO_BY_PHONE) -> payload.contact
-  32  resolve users by id (vkmax resolve_users)
-
   64  send message: by chatId (existing chat) OR by userId (opens a 1:1 dialog)
 
-/dm by user_id works via opcode 64 with a top-level `userId` (instead of `chatId`):
-MAX has no separate "open dialog" call — the server lazily creates the 1:1 dialog
-and returns its real chatId. (Confirmed against the decompiled official client +
-tested protocol docs; the earlier failure was putting the user_id in the `chatId`
+/dm opens a 1:1 dialog by sending opcode 64 with a top-level `userId` (not
+`chatId`): MAX has no separate "open dialog" call — it lazily creates the dialog
+and returns its real chatId. (The earlier failure put the user_id in the `chatId`
 slot, which addresses the wrong chat.)
 
 NOT wired:
-- Free-text name search (opcode 60 PUBLIC_SEARCH): payload schema unconfirmed; a
-  bad payload makes MAX drop the socket (proto.payload), killing the live bridge.
+- Free-text NAME search (opcode 60 PUBLIC_SEARCH): payload schema unconfirmed; a
+  bad payload makes MAX drop the socket. So channels are found by link/@username
+  (/join), and people by phone (/dm).
 """
 import logging
 import re
 from dataclasses import dataclass
 from random import randint
 
-from vkmax.functions.users import resolve_users
-
 _logger = logging.getLogger(__name__)
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_.]{3,32}$")
-_MAX_QUERY_LEN = 64
 
 
 @dataclass
@@ -49,7 +41,7 @@ def _short(value, limit: int = 200) -> str:
 
 
 def _norm_link(raw: str) -> str | None:
-    """MAX link payload (opcode 57/89) from a raw string: a group invite
+    """MAX link payload (opcode 57) from a raw string: a group invite
     (join/<hash>), a max.ru/<name> link, or a bare @username."""
     s = raw.strip()
     # Match a join hash only as a path segment (string start or after '/'), so a
@@ -64,19 +56,6 @@ def _norm_link(raw: str) -> str | None:
     if _USERNAME_RE.match(s):
         return f"https://max.ru/{s}"
     return None
-
-
-def _display(contact: dict) -> str | None:
-    names = contact.get("names")
-    if isinstance(names, list):
-        for n in names:
-            if isinstance(n, dict):
-                full = f"{n.get('firstName', '')} {n.get('lastName', '')}".strip()
-                if full:
-                    return full
-                if n.get("name"):
-                    return str(n["name"]).strip()
-    return (contact.get("name") or "").strip() or None
 
 
 def _chat_from_payload(payload: dict):
@@ -133,51 +112,6 @@ async def join(client, raw: str) -> CommandResult:
         return CommandResult(f"⚠️ Не удалось вступить: {_short(exc)}")
 
 
-async def find(client, query: str) -> CommandResult:
-    """Find a person by phone (46) or id (32), or a channel/person by @username/
-    link (89). Free-text name search isn't available."""
-    s = query.strip()
-    if len(s) > _MAX_QUERY_LEN:
-        return CommandResult("⚠️ Слишком длинный запрос для поиска.")
-    if _looks_like_phone(s):
-        phone = _normalize_phone(s)
-        if not phone:
-            return CommandResult("🔍 Похоже на телефон, но номер неполный. Пример: +79991234567")
-        try:
-            data = await client.invoke_method(opcode=46, payload={"phone": phone})
-            payload = data.get("payload", {}) if isinstance(data, dict) else {}
-            contact = payload.get("contact")
-            if payload.get("error") or not isinstance(contact, dict):
-                return CommandResult(f"🔍 По номеру {phone} никто не найден.")
-            return CommandResult(
-                f"🔍 Нашёл: {_display(contact) or contact.get('id')}\n🆔 id: {contact.get('id')}")
-        except Exception as exc:
-            return CommandResult(f"⚠️ Ошибка поиска по телефону: {_short(exc)}")
-    if s.lstrip("-").isdigit():
-        try:
-            data = await resolve_users(client, [int(s)])
-            contacts = data.get("payload", {}).get("contacts", []) if isinstance(data, dict) else []
-            if not contacts:
-                return CommandResult(f"🔍 Человек с id {s} не найден.")
-            return CommandResult(f"🔍 Нашёл: {_display(contacts[0]) or s}\n🆔 id: {s}")
-        except Exception as exc:
-            return CommandResult(f"⚠️ Ошибка поиска: {_short(exc)}")
-    link = _norm_link(s)
-    if not link:
-        return CommandResult(
-            "🔍 Поиск по названию (свободный текст) MAX через бота пока недоступен.\n"
-            "Ищите по: телефону (+7…), @нику, ссылке max.ru/… или числовому id.")
-    try:
-        data = await client.invoke_method(opcode=89, payload={"link": link})
-        payload = data.get("payload", {}) if isinstance(data, dict) else {}
-        chat_id, title = _chat_from_payload(payload)
-        if chat_id is None:
-            return CommandResult(f"🔍 Ничего не найдено по «{s}».")
-        return CommandResult(f"🔍 Нашёл: {title or s}\n🆔 id: {chat_id}\nВступить: /join {s}")
-    except Exception as exc:
-        return CommandResult(f"⚠️ Ошибка поиска: {_short(exc)}")
-
-
 async def _resolve_user_id(client, recipient) -> int | None:
     """A bare numeric user_id as-is, or look one up from a phone (opcode 46)."""
     s = str(recipient).strip()
@@ -201,9 +135,9 @@ async def _resolve_user_id(client, recipient) -> int | None:
 
 
 async def start_dm(client, recipient: str, text: str) -> CommandResult:
-    """Message a person by **phone or numeric user_id** (the id from /find). Sends
-    opcode 64 with a top-level `userId` (NOT `chatId`): MAX creates the 1:1 dialog
-    and returns its real chatId. The peer's reply then arrives as its own topic."""
+    """Message a person by **phone or numeric user_id**. Sends opcode 64 with a
+    top-level `userId` (NOT `chatId`): MAX creates the 1:1 dialog and returns its
+    real chatId. The peer's reply then arrives as its own topic."""
     body = (text or "").strip()
     if not body:
         return CommandResult("⚠️ Пустое сообщение. Пример: /dm +79991234567 привет")
@@ -212,7 +146,7 @@ async def start_dm(client, recipient: str, text: str) -> CommandResult:
     uid = await _resolve_user_id(client, recipient)
     if uid is None:
         return CommandResult(
-            "⚠️ Кому писать? Укажите телефон или id (из 🔍 /find).\n"
+            "⚠️ Кому писать? Укажите телефон или числовой id.\n"
             "Примеры: /dm +79991234567 привет   ·   /dm 21243808 привет")
     try:
         data = await client.invoke_method(opcode=64, payload={
