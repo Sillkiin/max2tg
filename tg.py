@@ -116,7 +116,10 @@ def set_my_commands(token: str, commands: list[dict]) -> None:
 
 
 def get_updates(token: str, offset: int | None = None, timeout: int = 25) -> list[dict]:
-    params = {"timeout": timeout, "allowed_updates": ["message"]}
+    # message_reaction is NOT delivered unless explicitly requested (and the bot
+    # must be a chat admin); edited_message lets us mirror Telegram->MAX edits.
+    params = {"timeout": timeout,
+              "allowed_updates": ["message", "edited_message", "message_reaction"]}
     if offset is not None:
         params["offset"] = offset
     # The HTTP read timeout must outlast the long-poll window (plus server

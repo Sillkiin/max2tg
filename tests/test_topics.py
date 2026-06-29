@@ -935,5 +935,194 @@ class MirrorTests(unittest.IsolatedAsyncioTestCase):
         fwd.assert_awaited_once()
 
 
+class _FakeMaxClient:
+    """Captures the last invoke_method opcode+payload for assertions."""
+    def __init__(self, response=None):
+        self.calls = []
+        self._response = response or {"payload": {"message": {"id": "M1"}}}
+
+    async def invoke_method(self, opcode, payload):
+        self.calls.append((opcode, payload))
+        return self._response
+
+
+class MaxMsgTests(unittest.IsolatedAsyncioTestCase):
+    async def test_edit_message_payload_shape(self):
+        import maxmsg
+        client = _FakeMaxClient()
+        await maxmsg.edit_message(client, 555, 116766060130147953, "новый текст")
+        opcode, payload = client.calls[0]
+        self.assertEqual(opcode, 67)
+        self.assertEqual(payload["messageId"], "116766060130147953")  # string
+        self.assertEqual(payload["text"], "новый текст")
+        self.assertEqual(payload["elements"], [])
+        self.assertEqual(payload["attachments"], [])  # required empty arrays
+
+    async def test_set_reaction_is_object_not_string(self):
+        import maxmsg
+        client = _FakeMaxClient()
+        await maxmsg.set_reaction(client, 555, "116765779164748382", "👍")
+        opcode, payload = client.calls[0]
+        self.assertEqual(opcode, 178)
+        self.assertEqual(payload["messageId"], 116765779164748382)  # int
+        self.assertEqual(payload["reaction"],
+                         {"reactionType": "EMOJI", "id": "👍"})
+
+    async def test_remove_reaction_payload(self):
+        import maxmsg
+        client = _FakeMaxClient()
+        await maxmsg.remove_reaction(client, 555, "116")
+        opcode, payload = client.calls[0]
+        self.assertEqual(opcode, 179)
+        self.assertEqual(payload, {"chatId": 555, "messageId": 116})
+
+
+class TgUpdatesTests(unittest.TestCase):
+    def test_get_updates_requests_edits_and_reactions(self):
+        import tg
+        captured = {}
+
+        def fake_call(token, method, _timeout=tg.REQUEST_TIMEOUT, **params):
+            captured["allowed"] = params.get("allowed_updates")
+            return []
+
+        with patch("tg._call", side_effect=fake_call):
+            tg.get_updates("tok", None, 25)
+        self.assertIn("message", captured["allowed"])
+        self.assertIn("edited_message", captured["allowed"])
+        self.assertIn("message_reaction", captured["allowed"])
+
+
+class ReverseMirrorTests(unittest.IsolatedAsyncioTestCase):
+    def make_bridge(self):
+        return MaxToTelegramBridge({
+            "telegram_bot_token": "token",
+            "telegram_chat_id": 111,
+            "telegram_fallback_chat_id": 111,
+            "telegram_forum_chat_id": -100222,
+            "telegram_topics_enabled": True,
+            "max_login_token": "max",
+        })
+
+    async def test_edited_message_mirrors_to_max(self):
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._remember_tg_sent(700, 555, "m1")
+        edited = {"chat": {"id": -100222}, "message_id": 700, "text": "fixed"}
+        with patch("bridge.maxmsg.edit_message", new=AsyncMock()) as edit:
+            await bridge._handle_edited_message(edited)
+        edit.assert_awaited_once_with(bridge._client, 555, "m1", "fixed")
+
+    async def test_edit_of_unrelayed_message_ignored(self):
+        bridge = self.make_bridge()
+        bridge._client = object()
+        with patch("bridge.maxmsg.edit_message", new=AsyncMock()) as edit:
+            await bridge._handle_edited_message(
+                {"chat": {"id": -100222}, "message_id": 999, "text": "x"})
+        edit.assert_not_awaited()
+
+    async def test_edit_of_media_message_skipped(self):
+        # Editing a media caption would strip the MAX attachment -> skip.
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._remember_tg_sent(700, 555, "m1")
+        edited = {"chat": {"id": -100222}, "message_id": 700, "caption": "new",
+                  "document": {"file_id": "d1", "file_name": "a.pdf"}}
+        with patch("bridge.maxmsg.edit_message", new=AsyncMock()) as edit:
+            await bridge._handle_edited_message(edited)
+        edit.assert_not_awaited()
+
+    async def test_edit_outside_allowed_chat_ignored(self):
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._remember_tg_sent(700, 555, "m1")
+        with patch("bridge.maxmsg.edit_message", new=AsyncMock()) as edit:
+            await bridge._handle_edited_message(
+                {"chat": {"id": 99999}, "message_id": 700, "text": "x"})
+        edit.assert_not_awaited()
+
+    async def test_reaction_set_mirrors_to_max(self):
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        reaction = {"chat": {"id": -100222}, "message_id": 500,
+                    "user": {"id": 12345},
+                    "new_reaction": [{"type": "emoji", "emoji": "🔥"}]}
+        with patch("bridge.maxmsg.set_reaction", new=AsyncMock()) as react:
+            await bridge._handle_message_reaction(reaction)
+        react.assert_awaited_once_with(bridge._client, 555, "m1", "🔥")
+
+    async def test_reaction_removed_calls_remove(self):
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        reaction = {"chat": {"id": -100222}, "message_id": 500,
+                    "user": {"id": 12345}, "new_reaction": []}
+        with patch("bridge.maxmsg.remove_reaction", new=AsyncMock()) as rem:
+            await bridge._handle_message_reaction(reaction)
+        rem.assert_awaited_once_with(bridge._client, 555, "m1")
+
+    async def test_bot_own_reaction_is_ignored(self):
+        # The bot's own mirrored reaction must not loop back into MAX.
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._bot_id = 4242
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        reaction = {"chat": {"id": -100222}, "message_id": 500,
+                    "user": {"id": 4242},
+                    "new_reaction": [{"type": "emoji", "emoji": "🔥"}]}
+        with patch("bridge.maxmsg.set_reaction", new=AsyncMock()) as react:
+            await bridge._handle_message_reaction(reaction)
+        react.assert_not_awaited()
+
+    async def test_reaction_on_unmapped_message_ignored(self):
+        bridge = self.make_bridge()
+        bridge._client = object()
+        reaction = {"chat": {"id": -100222}, "message_id": 777,
+                    "user": {"id": 1},
+                    "new_reaction": [{"type": "emoji", "emoji": "🔥"}]}
+        with patch("bridge.maxmsg.set_reaction", new=AsyncMock()) as react:
+            await bridge._handle_message_reaction(reaction)
+        react.assert_not_awaited()
+
+    async def test_custom_emoji_reaction_is_skipped_as_set(self):
+        # A custom emoji has no MAX equivalent -> treated as "no emoji" (remove).
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        reaction = {"chat": {"id": -100222}, "message_id": 500, "user": {"id": 1},
+                    "new_reaction": [{"type": "custom_emoji",
+                                      "custom_emoji_id": "999"}]}
+        with patch("bridge.maxmsg.set_reaction", new=AsyncMock()) as react, \
+                patch("bridge.maxmsg.remove_reaction", new=AsyncMock()) as rem:
+            await bridge._handle_message_reaction(reaction)
+        react.assert_not_awaited()
+        rem.assert_awaited_once()
+
+    async def test_handle_update_routes_edit_and_reaction(self):
+        bridge = self.make_bridge()
+        with patch.object(bridge, "_handle_edited_message", new=AsyncMock()) as e, \
+                patch.object(bridge, "_handle_message_reaction", new=AsyncMock()) as r:
+            await bridge._handle_update({"edited_message": {"message_id": 1}})
+            await bridge._handle_update({"message_reaction": {"message_id": 1}})
+        e.assert_awaited_once()
+        r.assert_awaited_once()
+
+    async def test_relay_records_tg_sent_for_later_edit(self):
+        # Relaying a user message into a topic records its TG id -> MAX id, so a
+        # subsequent Telegram edit can be mirrored back.
+        bridge = self.make_bridge()
+        bridge._client = object()
+        bridge._confirm_sent = False
+        target = {"chat_id": 555, "message_id": None, "sender": "X",
+                  "telegram_chat_id": -100222, "message_thread_id": 42}
+        message = {"message_id": 700, "text": "привет"}
+        with patch("bridge.max_send",
+                   new=AsyncMock(return_value={"payload": {"message": {"id": "M99"}}})):
+            await bridge._send_telegram_update_to_max(target, message)
+        self.assertEqual(bridge._tg_sent_to_max[700],
+                         {"chat_id": 555, "message_id": "M99"})
+
+
 if __name__ == "__main__":
     unittest.main()
