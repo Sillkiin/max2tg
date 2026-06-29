@@ -5,6 +5,7 @@ Media is sent by URL first (Telegram fetches it server-side); if that fails
 upload them via multipart.
 """
 import ipaddress
+import json
 import logging
 from urllib.parse import urlparse
 
@@ -119,7 +120,8 @@ def get_updates(token: str, offset: int | None = None, timeout: int = 25) -> lis
     # message_reaction is NOT delivered unless explicitly requested (and the bot
     # must be a chat admin); edited_message lets us mirror Telegram->MAX edits.
     params = {"timeout": timeout,
-              "allowed_updates": ["message", "edited_message", "message_reaction"]}
+              "allowed_updates": ["message", "edited_message", "message_reaction",
+                                  "callback_query"]}
     if offset is not None:
         params["offset"] = offset
     # The HTTP read timeout must outlast the long-poll window (plus server
@@ -171,10 +173,12 @@ def edit_forum_topic(token: str, chat_id: int | str, message_thread_id: int,
 
 def send_message(token: str, chat_id: int | str, text: str,
                  reply_to_message_id: int | None = None,
-                 message_thread_id: int | None = None) -> int | None:
+                 message_thread_id: int | None = None,
+                 reply_markup: dict | None = None) -> int | None:
     """Send plain text, splitting over Telegram's length limit.
 
-    Returns the message_id of the first chunk (used for reply mapping).
+    Returns the message_id of the first chunk (used for reply mapping). Any
+    reply_markup goes on that first chunk (so it matches the remembered id).
     """
     if not text:
         return None  # Telegram rejects empty text; avoid a silent no-op send
@@ -187,6 +191,8 @@ def send_message(token: str, chat_id: int | str, text: str,
             params["message_thread_id"] = message_thread_id
         if reply_to_message_id and first_id is None:
             params["reply_to_message_id"] = reply_to_message_id
+        if reply_markup and first_id is None:
+            params["reply_markup"] = reply_markup
         result = _call(token, "sendMessage", **params)
         if first_id is None:
             first_id = result.get("message_id")
@@ -236,9 +242,27 @@ def set_message_reaction(token: str, chat_id: int | str, message_id: int,
     return True
 
 
+def answer_callback_query(token: str, callback_query_id: str, text: str = "") -> None:
+    """Acknowledge an inline-button tap (stops the client's loading spinner)."""
+    params = {"callback_query_id": callback_query_id}
+    if text:
+        params["text"] = text
+    _call(token, "answerCallbackQuery", **params)
+
+
+def edit_message_reply_markup(token: str, chat_id: int | str, message_id: int,
+                              reply_markup: dict | None) -> None:
+    """Replace a message's inline keyboard (🗑 <-> confirm row, or clear it)."""
+    params = {"chat_id": chat_id, "message_id": message_id}
+    if reply_markup is not None:
+        params["reply_markup"] = reply_markup
+    _call(token, "editMessageReplyMarkup", **params)
+
+
 def _send_media(token: str, method: str, field: str, chat_id: int | str,
                 url: str, caption: str | None, filename: str | None,
-                message_thread_id: int | None = None) -> int | None:
+                message_thread_id: int | None = None,
+                reply_markup: dict | None = None) -> int | None:
     """Send media by URL, falling back to download + multipart upload."""
     caption = (caption or "")[:MAX_CAPTION_LEN] or None
     try:
@@ -247,6 +271,8 @@ def _send_media(token: str, method: str, field: str, chat_id: int | str,
             params["message_thread_id"] = message_thread_id
         if caption:
             params["caption"] = caption
+        if reply_markup:
+            params["reply_markup"] = reply_markup
         result = _call(token, method, **params)
         return result.get("message_id")
     except Exception as exc:
@@ -258,57 +284,69 @@ def _send_media(token: str, method: str, field: str, chat_id: int | str,
         params["message_thread_id"] = message_thread_id
     if caption:
         params["caption"] = caption
+    if reply_markup:
+        params["reply_markup"] = json.dumps(reply_markup)  # multipart wants a string
     files = {field: (filename or "file", content)}
     result = _call_upload(token, method, files, **params)
     return result.get("message_id")
 
 
 def send_photo(token, chat_id, url, caption=None,
-               message_thread_id: int | None = None) -> int | None:
+               message_thread_id: int | None = None,
+               reply_markup: dict | None = None) -> int | None:
     return _send_media(token, "sendPhoto", "photo", chat_id, url, caption,
-                       "photo.jpg", message_thread_id)
+                       "photo.jpg", message_thread_id, reply_markup)
 
 
 def send_animation(token, chat_id, url, caption=None,
-                   message_thread_id: int | None = None) -> int | None:
+                   message_thread_id: int | None = None,
+                   reply_markup: dict | None = None) -> int | None:
     return _send_media(token, "sendAnimation", "animation", chat_id, url,
-                       caption, "animation.mp4", message_thread_id)
+                       caption, "animation.mp4", message_thread_id, reply_markup)
 
 
 def send_video(token, chat_id, url, caption=None,
-               message_thread_id: int | None = None) -> int | None:
+               message_thread_id: int | None = None,
+               reply_markup: dict | None = None) -> int | None:
     return _send_media(token, "sendVideo", "video", chat_id, url, caption,
-                       "video.mp4", message_thread_id)
+                       "video.mp4", message_thread_id, reply_markup)
 
 
 def send_voice(token, chat_id, url, caption=None,
-               message_thread_id: int | None = None) -> int | None:
+               message_thread_id: int | None = None,
+               reply_markup: dict | None = None) -> int | None:
     return _send_media(token, "sendVoice", "voice", chat_id, url, caption,
-                       "voice.ogg", message_thread_id)
+                       "voice.ogg", message_thread_id, reply_markup)
 
 
 def send_audio(token, chat_id, url, caption=None,
-               message_thread_id: int | None = None) -> int | None:
+               message_thread_id: int | None = None,
+               reply_markup: dict | None = None) -> int | None:
     return _send_media(token, "sendAudio", "audio", chat_id, url, caption,
-                       "audio.mp3", message_thread_id)
+                       "audio.mp3", message_thread_id, reply_markup)
 
 
 def send_document(token, chat_id, url, caption=None, filename=None,
-                  message_thread_id: int | None = None) -> int | None:
+                  message_thread_id: int | None = None,
+                  reply_markup: dict | None = None) -> int | None:
     return _send_media(token, "sendDocument", "document", chat_id, url,
-                       caption, filename or "file", message_thread_id)
+                       caption, filename or "file", message_thread_id, reply_markup)
 
 
 def send_sticker(token, chat_id, url,
-                 message_thread_id: int | None = None) -> int | None:
+                 message_thread_id: int | None = None,
+                 reply_markup: dict | None = None) -> int | None:
     """Stickers have no caption in Telegram; fall back to document on failure."""
     try:
         params = {"chat_id": chat_id, "sticker": url}
         if message_thread_id:
             params["message_thread_id"] = message_thread_id
+        if reply_markup:
+            params["reply_markup"] = reply_markup
         result = _call(token, "sendSticker", **params)
         return result.get("message_id")
     except Exception as exc:
         _logger.info("sendSticker failed, sending as document: %s", exc)
         return send_document(token, chat_id, url, filename="sticker.webp",
-                             message_thread_id=message_thread_id)
+                             message_thread_id=message_thread_id,
+                             reply_markup=reply_markup)

@@ -1317,5 +1317,138 @@ class TelegramVoiceAttachTests(unittest.TestCase):
         self.assertEqual(att["kind"], "file")
 
 
+class TgInlineTests(unittest.TestCase):
+    def test_get_updates_requests_callback_query(self):
+        import tg
+        captured = {}
+
+        def fake(token, method, _timeout=tg.REQUEST_TIMEOUT, **p):
+            captured["allowed"] = p.get("allowed_updates")
+            return []
+
+        with patch("tg._call", side_effect=fake):
+            tg.get_updates("t", None, 25)
+        self.assertIn("callback_query", captured["allowed"])
+
+    def test_send_message_reply_markup_on_first_chunk(self):
+        import tg
+        calls = []
+
+        def fake(token, method, **p):
+            calls.append(p)
+            return {"message_id": len(calls)}
+
+        with patch("tg._call", side_effect=fake):
+            tg.send_message("t", 1, "hi", reply_markup={"inline_keyboard": []})
+        self.assertEqual(calls[0].get("reply_markup"), {"inline_keyboard": []})
+
+    def test_answer_and_edit_markup_hit_right_methods(self):
+        import tg
+        with patch("tg._call") as call:
+            tg.answer_callback_query("t", "cbid", "ok")
+            tg.edit_message_reply_markup("t", -100, 5, {"k": 1})
+        methods = [c.args[1] for c in call.call_args_list]
+        self.assertIn("answerCallbackQuery", methods)
+        self.assertIn("editMessageReplyMarkup", methods)
+
+
+class MaxDeleteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delete_message_opcode_66_for_me_true(self):
+        import maxmsg
+        cap = {}
+
+        class C:
+            async def invoke_method(self, opcode, payload):
+                cap["op"] = opcode
+                cap["pl"] = payload
+                return {}
+
+        await maxmsg.delete_message(C(), 555, ["m1"], for_me=True)
+        self.assertEqual(cap["op"], 66)
+        self.assertEqual(cap["pl"], {"chatId": 555, "messageIds": ["m1"], "forMe": True})
+
+
+class DeleteButtonTests(unittest.IsolatedAsyncioTestCase):
+    def make_bridge(self):
+        return MaxToTelegramBridge({
+            "telegram_bot_token": "token",
+            "telegram_chat_id": 111,
+            "telegram_fallback_chat_id": 111,
+            "telegram_forum_chat_id": -100222,
+            "telegram_topics_enabled": True,
+            "max_login_token": "max",
+        })
+
+    async def test_tap_expands_to_confirm(self):
+        import bridge
+        b = self.make_bridge()
+        cb = {"id": "c1", "data": "d",
+              "message": {"message_id": 500, "chat": {"id": -100222}}}
+        with patch("bridge.tg.edit_message_reply_markup") as edit, \
+                patch("bridge.tg.answer_callback_query"):
+            await b._handle_callback_query(cb)
+        self.assertEqual(edit.call_args.args[3], bridge._DELETE_CONFIRM)
+
+    async def test_cancel_reverts_to_button(self):
+        import bridge
+        b = self.make_bridge()
+        cb = {"id": "c1", "data": "dn",
+              "message": {"message_id": 500, "chat": {"id": -100222}}}
+        with patch("bridge.tg.edit_message_reply_markup") as edit, \
+                patch("bridge.tg.answer_callback_query"):
+            await b._handle_callback_query(cb)
+        self.assertEqual(edit.call_args.args[3], bridge._DELETE_BUTTON)
+
+    async def test_confirm_deletes_in_max_and_all_tg_copies(self):
+        b = self.make_bridge()
+        b._client = object()
+        b._remember(500, 555, "m1", "Alice", -100222, 42, "text")
+        b._remember(501, 555, "m1", "Alice", -100222, 42, "caption")
+        cb = {"id": "c1", "data": "dy",
+              "message": {"message_id": 500, "chat": {"id": -100222}}}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.delete_message") as tdel, \
+                patch("bridge.tg.answer_callback_query"):
+            await b._handle_callback_query(cb)
+        mdel.assert_awaited_once()
+        self.assertEqual(mdel.await_args.args[1], 555)        # MAX chat
+        self.assertEqual(mdel.await_args.args[2], ["m1"])     # MAX message ids
+        self.assertTrue(mdel.await_args.kwargs.get("for_me"))  # safe mode
+        deleted = sorted(c.args[2] for c in tdel.call_args_list)
+        self.assertEqual(deleted, [500, 501])                 # both TG copies
+
+    async def test_confirm_unknown_message_is_graceful(self):
+        b = self.make_bridge()
+        b._client = object()
+        cb = {"id": "c1", "data": "dy",
+              "message": {"message_id": 999, "chat": {"id": -100222}}}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.edit_message_reply_markup"), \
+                patch("bridge.tg.answer_callback_query"):
+            await b._handle_callback_query(cb)
+        mdel.assert_not_awaited()
+
+    async def test_handle_update_routes_callback(self):
+        b = self.make_bridge()
+        with patch.object(b, "_handle_callback_query", new=AsyncMock()) as h:
+            await b._handle_update({"callback_query": {"id": "c1", "data": "d",
+                                                       "message": {}}})
+        h.assert_awaited_once()
+
+    async def test_forward_attaches_delete_button_in_topic(self):
+        import bridge
+        b = self.make_bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            b._state = BridgeState(Path(tmp) / "state.json")
+            b._state.save_topic(555, thread_id=42, title="A", chat_type="dialog")
+            with patch.object(b, "_telegram_target",
+                              new=AsyncMock(return_value=(-100222, 42, True))), \
+                    patch("bridge.tg.send_message", return_value=900) as send:
+                await b._forward(object(), "hdr", "привет", [], 555, "m1", "A",
+                                 "A", "dialog")
+            self.assertEqual(send.call_args.kwargs.get("reply_markup"),
+                             bridge._DELETE_BUTTON)
+
+
 if __name__ == "__main__":
     unittest.main()
