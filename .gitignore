@@ -7,6 +7,8 @@ state.json
 .env
 _*.py
 _*.txt
+.coverage
+htmlcov/
 # Local launchers (machine-specific paths; for desktop shortcuts + autostart)
 start-bridge.ps1
 start-bridge-bg.ps1
