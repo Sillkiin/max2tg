@@ -61,6 +61,7 @@ ATTACH_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
 # reverse-engineered (partly inferred) payload shapes can be confirmed against
 # real data. Frames hold message text/ids, so it is size-capped and ACL-locked.
 EVENT_DEBUG_LOG = Path(__file__).parent / "events.log"
+EVENT_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
 EVENT_FRAME_MAX_CHARS = 20000
 # Session watchdog: poll the live MAX session this often, and treat total silence
 # (no frames at all, including the 30s keepalive replies) for this long as a
@@ -156,8 +157,8 @@ def _log_raw_attaches(message: dict) -> None:
             return
         with ATTACH_DEBUG_LOG.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(message.get("attaches"), ensure_ascii=False) + "\n")
-    except OSError:
-        pass
+    except OSError as exc:
+        _logger.debug("attach debug-log write failed: %s", exc)
 
 
 def _log_event_frame(packet: dict) -> None:
@@ -166,7 +167,7 @@ def _log_event_frame(packet: dict) -> None:
     and size-capped because frames hold message text and ids."""
     try:
         if (EVENT_DEBUG_LOG.exists()
-                and EVENT_DEBUG_LOG.stat().st_size > ATTACH_DEBUG_LOG_MAX_BYTES):
+                and EVENT_DEBUG_LOG.stat().st_size > EVENT_DEBUG_LOG_MAX_BYTES):
             return
         line = json.dumps(
             {"opcode": packet.get("opcode"), "payload": packet.get("payload")},
@@ -174,8 +175,8 @@ def _log_event_frame(packet: dict) -> None:
         )[:EVENT_FRAME_MAX_CHARS]
         with EVENT_DEBUG_LOG.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
-    except OSError:
-        pass
+    except OSError as exc:
+        _logger.debug("event debug-log write failed: %s", exc)
 
 
 # Replied-to/quoted preview length in a reply header.
@@ -1448,8 +1449,8 @@ class MaxToTelegramBridge:
             try:
                 await asyncio.to_thread(tg.send_message, self._token, chat, t,
                                         message_thread_id=thread)
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("say() failed in _handle_del: %s", exc)
 
         reply = message.get("reply_to_message")
         if not reply:
@@ -1471,6 +1472,8 @@ class MaxToTelegramBridge:
                             target.get("message_id"), exc)
             await say(f"Не удалось удалить в MAX: {exc}")
             return
+        _logger.info("Deleted MAX message %s in chat %s for everyone (/del, opcode 66)",
+                     target.get("message_id"), target.get("chat_id"))
         self._tg_sent_to_max.pop(reply.get("message_id"), None)
         # Tidy Telegram: drop the /del command and your message. Needs the bot's
         # delete-messages right; if it lacks it, tell the user so they're not left

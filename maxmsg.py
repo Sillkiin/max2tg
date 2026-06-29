@@ -28,7 +28,7 @@ REACT_SET_OPCODE = 178
 REACT_REMOVE_OPCODE = 179
 
 
-def _as_int_id(value):
+def _as_int_id(value: object) -> object:
     """Reactions want messageId as an int; MAX ids may arrive as huge strings.
     Python ints are arbitrary-precision so the value round-trips exactly. Leave
     a non-numeric id untouched rather than crash."""

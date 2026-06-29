@@ -228,8 +228,9 @@ async def _invoke_send(client: MaxClient, payload: dict, kind: str):
     raise RuntimeError(f"MAX {kind} attachment not ready after {SEND_RETRIES} retries")
 
 
-async def _send_attach(client: MaxClient, chat_id, attach: dict, text: str,
-                       reply_to_message_id, notify: bool = True):
+async def _send_attach(client: MaxClient, chat_id: int | str, attach: dict,
+                       text: str, reply_to_message_id: int | str | None = None,
+                       notify: bool = True) -> dict:
     return await _invoke_send(
         client,
         {
@@ -298,9 +299,10 @@ async def upload_photo(client: MaxClient, content: bytes, filename: str,
     return token
 
 
-async def send_uploaded_photo(client: MaxClient, chat_id, content: bytes,
+async def send_uploaded_photo(client: MaxClient, chat_id: int | str, content: bytes,
                               filename: str, mime_type: str | None = None,
-                              text: str = "", reply_to_message_id=None):
+                              text: str = "",
+                              reply_to_message_id: int | str | None = None) -> dict:
     token = await upload_photo(client, content, filename, mime_type)
     return await _send_attach(
         client, chat_id, {"_type": "PHOTO", "photoToken": token},
@@ -325,9 +327,10 @@ async def upload_video(client: MaxClient, content: bytes, filename: str,
     return video_id, token
 
 
-async def send_uploaded_video(client: MaxClient, chat_id, content: bytes,
+async def send_uploaded_video(client: MaxClient, chat_id: int | str, content: bytes,
                               filename: str, mime_type: str | None = None,
-                              text: str = "", reply_to_message_id=None):
+                              text: str = "",
+                              reply_to_message_id: int | str | None = None) -> dict:
     video_id, token = await upload_video(client, content, filename, mime_type)
     attach = {"_type": "VIDEO", "videoId": video_id}
     if token is not None:
@@ -359,10 +362,10 @@ async def upload_audio(client: MaxClient, content: bytes,
     return audio_id, token
 
 
-async def send_uploaded_audio(client: MaxClient, chat_id, content: bytes,
+async def send_uploaded_audio(client: MaxClient, chat_id: int | str, content: bytes,
                               duration_ms: int = 0, text: str = "",
-                              reply_to_message_id=None,
-                              filename: str = "voice.ogg"):
+                              reply_to_message_id: int | str | None = None,
+                              filename: str = "voice.ogg") -> dict:
     """Send a (Telegram) voice into MAX as a native voice message — waveform +
     duration — rather than a generic file. Telegram voices are already ogg/opus,
     so the bytes are uploaded as-is."""
@@ -374,10 +377,11 @@ async def send_uploaded_audio(client: MaxClient, chat_id, content: bytes,
     return await _send_attach(client, chat_id, attach, text, reply_to_message_id)
 
 
-async def send_uploaded_media(client: MaxClient, chat_id, content: bytes,
+async def send_uploaded_media(client: MaxClient, chat_id: int | str, content: bytes,
                               filename: str, mime_type: str | None = None,
                               kind: str = "file", text: str = "",
-                              reply_to_message_id=None, duration_ms: int = 0):
+                              reply_to_message_id: int | str | None = None,
+                              duration_ms: int = 0) -> dict:
     """Dispatch by media kind so photos/videos/voices use their proper MAX attach
     type instead of being sent as generic files (which recipients don't receive)."""
     if kind == "photo":

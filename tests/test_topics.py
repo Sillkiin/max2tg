@@ -1358,7 +1358,10 @@ class DelCommandTests(unittest.IsolatedAsyncioTestCase):
         mdel.assert_awaited_once()
         self.assertEqual(mdel.await_args.args[1], 555)        # MAX chat
         self.assertEqual(mdel.await_args.args[2], ["m1"])     # MAX message id
-        self.assertFalse(mdel.await_args.kwargs.get("for_me"))  # for EVERYONE
+        # for EVERYONE: kwarg must be present AND explicitly False, so a
+        # regression dropping it (default for_me=True = self-only) is caught.
+        self.assertEqual(mdel.await_args.kwargs["for_me"], False)
+        self.assertNotIn(700, b._tg_sent_to_max)  # entry consumed after delete
         deleted = sorted(c.args[2] for c in tdel.call_args_list)
         self.assertEqual(deleted, [700, 800])                 # tidies reply + /del
 
@@ -1371,6 +1374,7 @@ class DelCommandTests(unittest.IsolatedAsyncioTestCase):
             await b._handle_del(message)
         mdel.assert_not_awaited()
         say.assert_called()
+        self.assertIn("СВО", say.call_args.args[2])  # hint points at OWN message
 
     async def test_del_on_someone_elses_message_refused(self):
         # A forwarded (others') message is in _reply_map, not _tg_sent_to_max ->
@@ -1385,6 +1389,7 @@ class DelCommandTests(unittest.IsolatedAsyncioTestCase):
             await b._handle_del(message)
         mdel.assert_not_awaited()
         say.assert_called()
+        self.assertIn("ВАШИ", say.call_args.args[2])  # refusal explains own-only
 
     async def test_handle_update_routes_del_command(self):
         b = self.make_bridge()
@@ -1395,6 +1400,53 @@ class DelCommandTests(unittest.IsolatedAsyncioTestCase):
             await b._handle_update({"message": message})
         h.assert_awaited_once()
         cmd.assert_not_awaited()  # /del is NOT passed to the generic command path
+
+    async def test_handle_update_routes_delete_alias(self):
+        b = self.make_bridge()
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/delete",
+                   "reply_to_message": {"message_id": 700}}
+        with patch.object(b, "_handle_del", new=AsyncMock()) as h, \
+                patch.object(b, "_handle_command", new=AsyncMock()):
+            await b._handle_update({"message": message})
+        h.assert_awaited_once()  # /delete is an alias for /del
+
+    async def test_del_from_non_owner_chat_ignored(self):
+        # The shared owner gate (allowed_chats) runs BEFORE /del dispatch, so a
+        # message from an unknown chat never reaches the destructive path.
+        b = self.make_bridge()
+        message = {"chat": {"id": 99999}, "message_id": 800, "text": "/del",
+                   "reply_to_message": {"message_id": 700}}
+        with patch.object(b, "_handle_del", new=AsyncMock()) as h:
+            await b._handle_update({"message": message})
+        h.assert_not_awaited()
+
+    async def test_del_when_disconnected_does_not_delete(self):
+        b = self.make_bridge()
+        b._client = None  # MAX socket down
+        b._remember_tg_sent(700, 555, "m1")
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del",
+                   "reply_to_message": {"message_id": 700}}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.send_message") as say:
+            await b._handle_del(message)
+        mdel.assert_not_awaited()  # never delete with no connection
+        self.assertIn("не подключён", say.call_args.args[2])
+
+    async def test_del_reports_when_telegram_cleanup_fails(self):
+        # MAX delete succeeds but the bot lacks delete-messages rights in TG ->
+        # tell the user it worked in MAX and to tidy the leftovers manually.
+        b = self.make_bridge()
+        b._client = object()
+        b._remember_tg_sent(700, 555, "m1")
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del",
+                   "reply_to_message": {"message_id": 700}}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.delete_message",
+                      side_effect=RuntimeError("no rights")), \
+                patch("bridge.tg.send_message") as say:
+            await b._handle_del(message)
+        mdel.assert_awaited_once()  # MAX delete still happened
+        self.assertIn("вручную", say.call_args.args[2])
 
 
 if __name__ == "__main__":
