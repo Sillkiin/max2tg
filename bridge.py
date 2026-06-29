@@ -1150,10 +1150,18 @@ class MaxToTelegramBridge:
                 "mime_type": "image/jpeg",
                 "kind": "photo",
             }
+        if message.get("voice"):
+            voice = message["voice"]
+            return {
+                "file_id": voice.get("file_id"),
+                "filename": "voice.ogg",
+                "mime_type": "audio/ogg",
+                "kind": "voice",  # native MAX voice (waveform + duration)
+                "duration_ms": int((voice.get("duration") or 0) * 1000),
+            }
         for key, fallback_name, fallback_mime, kind in (
             ("animation", "telegram-animation.mp4", "video/mp4", "video"),
             ("video", "telegram-video.mp4", "video/mp4", "video"),
-            ("voice", "telegram-voice.ogg", "audio/ogg", "file"),
             ("audio", "telegram-audio.mp3", "audio/mpeg", "file"),
             ("video_note", "telegram-video-note.mp4", "video/mp4", "video"),
         ):
@@ -1200,6 +1208,7 @@ class MaxToTelegramBridge:
                     kind=attachment.get("kind", "file"),
                     text=caption,
                     reply_to_message_id=target.get("message_id"),
+                    duration_ms=attachment.get("duration_ms", 0),
                 )
                 self._remember_tg_sent(tg_message_id, target["chat_id"],
                                        self._extract_sent_message_id(response))

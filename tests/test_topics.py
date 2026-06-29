@@ -516,6 +516,7 @@ class BridgeTopicTests(unittest.IsolatedAsyncioTestCase):
                 kind="file",
                 text="",
                 reply_to_message_id=None,
+                duration_ms=0,
             )
 
     def test_telegram_sticker_attachment_metadata(self):
@@ -1243,6 +1244,77 @@ class VoiceForwardTests(unittest.IsolatedAsyncioTestCase):
             await bridge._send_resolved_item(item, True, self._ctx())
         sv.assert_not_called()
         note.assert_awaited_once()
+
+
+class NativeVoiceUploadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_upload_audio_requests_audio_typed_slot(self):
+        import mediamax
+        captured = {}
+
+        class C:
+            async def invoke_method(self, opcode, payload):
+                captured["opcode"] = opcode
+                captured["payload"] = payload
+                return {"payload": {"info": [
+                    {"url": "https://omu.okcdn.ru/upload.do", "videoId": 777,
+                     "token": "tk"}]}}
+
+        with patch("mediamax._upload_multipart") as up:
+            aid, tok = await mediamax.upload_audio(C(), b"oggdata", "voice.ogg")
+        self.assertEqual(captured["opcode"], 82)
+        self.assertEqual(captured["payload"],
+                         {"count": 1, "type": 2, "uploaderType": 0})
+        self.assertEqual((aid, tok), (777, "tk"))
+        self.assertEqual(up.call_args.args[0], "https://omu.okcdn.ru/upload.do")
+        self.assertEqual(up.call_args.args[3], "audio/ogg")  # multipart, audio mime
+
+    async def test_send_uploaded_audio_builds_audio_attach(self):
+        import mediamax
+        with patch("mediamax.upload_audio", new=AsyncMock(return_value=(777, "tk"))), \
+                patch("mediamax._send_attach", new=AsyncMock()) as sa:
+            await mediamax.send_uploaded_audio(object(), 555, b"ogg", duration_ms=4280)
+        self.assertEqual(sa.call_args.args[2],
+                         {"_type": "AUDIO", "audioId": 777, "duration": 4280,
+                          "token": "tk"})
+
+    async def test_media_dispatch_voice_uses_native_audio(self):
+        import mediamax
+        with patch("mediamax.send_uploaded_audio",
+                   new=AsyncMock(return_value="ok")) as a, \
+                patch("mediamax.send_uploaded_file", new=AsyncMock()) as f:
+            await mediamax.send_uploaded_media(
+                object(), 555, b"ogg", "voice.ogg", "audio/ogg",
+                kind="voice", duration_ms=3000)
+        a.assert_awaited_once()
+        self.assertEqual(a.await_args.args[3], 3000)  # duration_ms forwarded
+        f.assert_not_awaited()
+
+    async def test_media_dispatch_voice_falls_back_to_file(self):
+        import mediamax
+        with patch("mediamax.send_uploaded_audio",
+                   new=AsyncMock(side_effect=RuntimeError("rejected"))), \
+                patch("mediamax.send_uploaded_file",
+                      new=AsyncMock(return_value="file")) as f:
+            result = await mediamax.send_uploaded_media(
+                object(), 555, b"ogg", "voice.ogg", "audio/ogg", kind="voice")
+        f.assert_awaited_once()
+        self.assertEqual(result, "file")
+
+
+class TelegramVoiceAttachTests(unittest.TestCase):
+    def test_voice_maps_to_native_kind_with_duration_ms(self):
+        att = MaxToTelegramBridge._telegram_attachment(
+            {"voice": {"file_id": "v1", "duration": 5}})
+        self.assertEqual(att["kind"], "voice")
+        self.assertEqual(att["duration_ms"], 5000)
+        self.assertEqual(att["mime_type"], "audio/ogg")
+        self.assertEqual(att["file_id"], "v1")
+
+    def test_audio_file_stays_a_file(self):
+        # A music/audio file is NOT a voice -> still a generic file.
+        att = MaxToTelegramBridge._telegram_attachment(
+            {"audio": {"file_id": "a1", "title": "song"}})
+        self.assertEqual(att["kind"], "file")
 
 
 if __name__ == "__main__":

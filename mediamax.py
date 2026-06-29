@@ -31,6 +31,11 @@ _AUDIO_SOURCE_MIMES = (("opus", "audio/ogg"), ("m4a", "audio/mp4"),
 PHOTO_UPLOAD_SLOT_OPCODE = 80
 VIDEO_UPLOAD_SLOT_OPCODE = 82
 FILE_UPLOAD_SLOT_OPCODE = 87
+# A native voice/audio upload reuses the video upload opcode (82) but with
+# type=2 (audio) so the slot is audio-tagged (omu.okcdn.ru), then the bytes go
+# up as multipart/form-data. Reverse-engineered from the MAX Android app
+# (see docs/native-voice-research.md). type=dtg.E(3)=2 in the app.
+AUDIO_UPLOAD_TYPE = 2
 SEND_MESSAGE_OPCODE = 64
 UPLOAD_TIMEOUT = (5, 120)
 # MAX processes an uploaded attachment asynchronously; sending the message
@@ -330,17 +335,67 @@ async def send_uploaded_video(client: MaxClient, chat_id, content: bytes,
     return await _send_attach(client, chat_id, attach, text, reply_to_message_id)
 
 
+async def upload_audio(client: MaxClient, content: bytes,
+                       filename: str = "voice.ogg") -> tuple:
+    """Upload a voice/audio file as a NATIVE MAX voice; return (audio_id, token).
+
+    Uses the video upload opcode (82) with type=2 so the slot is audio-tagged
+    (omu.okcdn.ru), then uploads the bytes as multipart/form-data — the audio
+    endpoint rejects the raw Content-Range body that videos use (HTTP 415).
+    """
+    response = await client.invoke_method(
+        opcode=VIDEO_UPLOAD_SLOT_OPCODE,
+        payload={"count": 1, "type": AUDIO_UPLOAD_TYPE, "uploaderType": 0},
+    )
+    payload = response.get("payload", {})
+    _logger.info("audio upload slot payload: %s", payload)
+    slot = _slot(payload)
+    url = slot.get("url")
+    audio_id = slot.get("audioId") or slot.get("videoId")
+    token = slot.get("token")
+    if not url or audio_id is None:
+        raise RuntimeError(f"audio upload slot is incomplete: {payload}")
+    await asyncio.to_thread(_upload_multipart, url, content, filename, "audio/ogg")
+    return audio_id, token
+
+
+async def send_uploaded_audio(client: MaxClient, chat_id, content: bytes,
+                              duration_ms: int = 0, text: str = "",
+                              reply_to_message_id=None,
+                              filename: str = "voice.ogg"):
+    """Send a (Telegram) voice into MAX as a native voice message — waveform +
+    duration — rather than a generic file. Telegram voices are already ogg/opus,
+    so the bytes are uploaded as-is."""
+    audio_id, token = await upload_audio(client, content, filename)
+    attach = {"_type": "AUDIO", "audioId": audio_id,
+              "duration": int(duration_ms or 0)}
+    if token is not None:
+        attach["token"] = token
+    return await _send_attach(client, chat_id, attach, text, reply_to_message_id)
+
+
 async def send_uploaded_media(client: MaxClient, chat_id, content: bytes,
                               filename: str, mime_type: str | None = None,
                               kind: str = "file", text: str = "",
-                              reply_to_message_id=None):
-    """Dispatch by media kind so photos/videos use their proper MAX attach type
-    instead of being sent as generic files (which recipients don't receive)."""
+                              reply_to_message_id=None, duration_ms: int = 0):
+    """Dispatch by media kind so photos/videos/voices use their proper MAX attach
+    type instead of being sent as generic files (which recipients don't receive)."""
     if kind == "photo":
         return await send_uploaded_photo(
             client, chat_id, content, filename, mime_type, text, reply_to_message_id)
     if kind == "video":
         return await send_uploaded_video(
             client, chat_id, content, filename, mime_type, text, reply_to_message_id)
+    if kind == "voice":
+        # Native voice; if MAX rejects the audio (format/processing), fall back
+        # to a plain .ogg file (which still plays in MAX) so nothing is lost.
+        try:
+            return await send_uploaded_audio(
+                client, chat_id, content, duration_ms, text, reply_to_message_id)
+        except Exception as exc:
+            _logger.warning("Native voice upload failed (%s); sending as file.", exc)
+            return await send_uploaded_file(
+                client, chat_id, content, filename, mime_type, text,
+                reply_to_message_id)
     return await send_uploaded_file(
         client, chat_id, content, filename, mime_type, text, reply_to_message_id)
