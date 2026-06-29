@@ -10,11 +10,11 @@ Opcodes:
   178 MSG_REACT_SET     {chatId, messageId:int, reaction:{reactionType:"EMOJI", id:"<emoji>"}}
   179 MSG_REACT_REMOVE  {chatId, messageId:int}
 
-Deleting a MAX message is opcode 66. We default `for_me=True` (delete only on
-our side) — that is the SAFE mode. `for_me=False` (delete for everyone) has a
-documented cascade-delete bug, but ONLY when paired with opcode 92
-(CHAT_ACTIVITY) right before it; this bridge never sends opcode 92, so even
-for_me=False is safe here — still, the delete-button feature uses for_me=True.
+NOTE: deleting a MAX message (opcode 66) is intentionally NOT wrapped here.
+`forMe:false` has a documented cascade-delete bug (it can wipe every message up
+to a server watermark, not just the targeted ids), and Telegram never notifies a
+bot when a user deletes a message — so there is no safe trigger for a delete and
+this module deliberately offers no way to send opcode 66.
 """
 import logging
 
@@ -23,7 +23,6 @@ from vkmax.client import MaxClient
 _logger = logging.getLogger(__name__)
 
 EDIT_OPCODE = 67
-DELETE_OPCODE = 66
 REACT_SET_OPCODE = 178
 REACT_REMOVE_OPCODE = 179
 
@@ -71,14 +70,4 @@ async def remove_reaction(client: MaxClient, chat_id, message_id):
     return await client.invoke_method(
         opcode=REACT_REMOVE_OPCODE,
         payload={"chatId": chat_id, "messageId": _as_int_id(message_id)},
-    )
-
-
-async def delete_message(client: MaxClient, chat_id, message_ids, for_me: bool = True):
-    """Delete message(s) in a MAX chat (opcode 66). `for_me=True` (default) deletes
-    only on our side — the safe mode that also avoids the for_me=False cascade bug.
-    `message_ids` is a list."""
-    return await client.invoke_method(
-        opcode=DELETE_OPCODE,
-        payload={"chatId": chat_id, "messageIds": list(message_ids), "forMe": for_me},
     )

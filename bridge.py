@@ -106,16 +106,6 @@ _MEDIA_SENDERS = {
 # before sending (vs _MEDIA_SENDERS kinds that already carry a direct url).
 RESOLVABLE_KINDS = frozenset({"file_resolve", "video_resolve", "audio_resolve"})
 
-# Inline "delete" affordance shown under each message the bridge posts in a topic
-# (a bot can only attach buttons to its OWN messages — i.e. forwarded-from-MAX
-# ones). Tap 🗑 -> a confirm row -> remove the message from your MAX (forMe:true,
-# the safe no-cascade mode) and delete its Telegram copies. callback_data is tiny
-# (d/dy/dn); the target MAX message is found from the tapped message via _reply_map.
-_DELETE_BUTTON = {"inline_keyboard": [[{"text": "🗑", "callback_data": "d"}]]}
-_DELETE_CONFIRM = {"inline_keyboard": [[
-    {"text": "✅ удалить", "callback_data": "dy"},
-    {"text": "✖", "callback_data": "dn"}]]}
-
 
 def _extract_own_id(login_response: dict) -> int | None:
     profile = login_response.get("payload", {}).get("profile", {})
@@ -711,7 +701,7 @@ class MaxToTelegramBridge:
             body = self._topic_body(sender, text, notes, is_channel)
             first_msg_id = await asyncio.to_thread(
                 tg.send_message, self._token, self._forum_chat_id, body,
-                message_thread_id=thread_id, reply_markup=_DELETE_BUTTON,
+                message_thread_id=thread_id,
             )
             self._remember(
                 first_msg_id, chat_id, message_id, sender,
@@ -962,10 +952,9 @@ class MaxToTelegramBridge:
         if text or notes or (not media and not to_resolve):
             body = self._render_text_body(in_topic, is_channel, sender, header,
                                           text, notes)
-            msg_id = await asyncio.to_thread(
-                tg.send_message, self._token, telegram_chat_id, body,
-                message_thread_id=thread_id,
-                reply_markup=_DELETE_BUTTON if in_topic else None)
+            msg_id = await asyncio.to_thread(tg.send_message, self._token,
+                                             telegram_chat_id, body,
+                                             message_thread_id=thread_id)
             self._remember(msg_id, chat_id, max_message_id, sender,
                            telegram_chat_id, thread_id)
             header_sent = True
@@ -999,16 +988,15 @@ class MaxToTelegramBridge:
                          else self._caption(header, header_sent, item.text)))
         sender_fn, supports_caption = _MEDIA_SENDERS[item.kind]
         role = "caption" if supports_caption else "media"
-        kb = _DELETE_BUTTON if in_topic else None
         try:
             if supports_caption:
                 msg_id = await asyncio.to_thread(
                     sender_fn, self._token, telegram_chat_id, item.url, caption,
-                    message_thread_id=thread_id, reply_markup=kb)
+                    message_thread_id=thread_id)
             else:
                 msg_id = await asyncio.to_thread(
                     sender_fn, self._token, telegram_chat_id, item.url,
-                    message_thread_id=thread_id, reply_markup=kb)
+                    message_thread_id=thread_id)
         except Exception as exc:
             _logger.warning("Failed to send %s: %s", item.kind, exc)
             msg_id = await self._send_note(
@@ -1026,12 +1014,11 @@ class MaxToTelegramBridge:
         caption = (item.text if header_sent
                    else (self._topic_caption(sender, item.text, is_channel) if in_topic
                          else self._caption(header, header_sent, item.text)))
-        kb = _DELETE_BUTTON if in_topic else None
         if item.size and item.size > TELEGRAM_UPLOAD_LIMIT:
             msg_id = await asyncio.to_thread(
                 tg.send_message, self._token, telegram_chat_id,
                 f"{caption} [слишком большой для Telegram] — открыть в MAX",
-                message_thread_id=thread_id, reply_markup=kb)
+                message_thread_id=thread_id)
             self._remember(msg_id, chat_id, max_message_id, sender,
                            telegram_chat_id, thread_id, "media")
             return True
@@ -1042,8 +1029,7 @@ class MaxToTelegramBridge:
                     client, item.file_id, chat_id, max_message_id)
                 msg_id = await asyncio.to_thread(
                     tg.send_document, self._token, telegram_chat_id, url,
-                    caption, item.filename, message_thread_id=thread_id,
-                    reply_markup=kb)
+                    caption, item.filename, message_thread_id=thread_id)
             elif item.kind == "audio_resolve":
                 # Voice message: resolve to an opus/ogg URL and send it as a
                 # native Telegram voice (m4a/mp3 fall back to a playable audio).
@@ -1052,13 +1038,13 @@ class MaxToTelegramBridge:
                 sender_fn = tg.send_voice if mime == "audio/ogg" else tg.send_audio
                 msg_id = await asyncio.to_thread(
                     sender_fn, self._token, telegram_chat_id, url, caption,
-                    message_thread_id=thread_id, reply_markup=kb)
+                    message_thread_id=thread_id)
             else:  # video_resolve
                 url = await mediamax.resolve_video_url(
                     client, item.video_id, chat_id, max_message_id)
                 msg_id = await asyncio.to_thread(
                     tg.send_video, self._token, telegram_chat_id, url, caption,
-                    message_thread_id=thread_id, reply_markup=kb)
+                    message_thread_id=thread_id)
         except Exception as exc:
             _logger.warning("Failed to resolve/send %s: %s", item.kind, exc)
             msg_id = await self._send_note(
@@ -1332,10 +1318,6 @@ class MaxToTelegramBridge:
         await reply(result.text)
 
     async def _handle_update(self, update: dict) -> None:
-        # Inline 🗑 delete button taps.
-        if "callback_query" in update:
-            await self._handle_callback_query(update["callback_query"])
-            return
         # Telegram->MAX edit/reaction mirroring (own messages / reacted messages).
         if "edited_message" in update:
             await self._handle_edited_message(update["edited_message"])
@@ -1449,73 +1431,6 @@ class MaxToTelegramBridge:
         except Exception as exc:
             _logger.info("Could not mirror Telegram reaction to MAX msg %s: %s",
                          message_id, exc)
-
-    async def _answer_cb(self, cb_id, text: str = "") -> None:
-        try:
-            await asyncio.to_thread(tg.answer_callback_query, self._token, cb_id, text)
-        except Exception:
-            pass
-
-    async def _handle_callback_query(self, cb: dict) -> None:
-        """Inline 🗑 delete button: 🗑 -> confirm row -> remove from MAX + Telegram."""
-        message = cb.get("message") or {}
-        chat = message.get("chat", {}).get("id")
-        cb_id = cb.get("id")
-        tg_msg_id = message.get("message_id")
-        data = cb.get("data")
-        if str(chat) not in self._allowed_chats():
-            await self._answer_cb(cb_id)
-            return
-        if data == "d":          # expand 🗑 -> confirm row
-            try:
-                await asyncio.to_thread(tg.edit_message_reply_markup, self._token,
-                                        chat, tg_msg_id, _DELETE_CONFIRM)
-            except Exception:
-                pass
-            await self._answer_cb(cb_id)
-        elif data == "dn":       # cancel -> back to 🗑
-            try:
-                await asyncio.to_thread(tg.edit_message_reply_markup, self._token,
-                                        chat, tg_msg_id, _DELETE_BUTTON)
-            except Exception:
-                pass
-            await self._answer_cb(cb_id)
-        elif data == "dy":       # confirmed
-            await self._delete_from_telegram(cb_id, chat, tg_msg_id)
-
-    async def _delete_from_telegram(self, cb_id, chat, tg_msg_id) -> None:
-        record = self._reply_map.get(tg_msg_id)
-        if not record or record.get("message_id") is None:
-            await self._answer_cb(cb_id, "Не вышло — сообщение больше не отслеживается")
-            try:
-                await asyncio.to_thread(tg.edit_message_reply_markup, self._token,
-                                        chat, tg_msg_id, _DELETE_BUTTON)
-            except Exception:
-                pass
-            return
-        max_chat, max_msg = record["chat_id"], record["message_id"]
-        # Remove it from MAX on our side (safe forMe:true), best-effort.
-        if self._client is not None:
-            try:
-                await maxmsg.delete_message(self._client, max_chat, [max_msg], for_me=True)
-            except Exception as exc:
-                _logger.info("MAX delete failed for msg %s: %s", max_msg, exc)
-        # Delete every Telegram copy of that MAX message (text + media parts).
-        copies = self._forward_map.pop((max_chat, str(max_msg)), None) or []
-        deleted = set()
-        for entry in copies:
-            try:
-                await asyncio.to_thread(tg.delete_message, self._token,
-                                        entry["chat_id"], entry["message_id"])
-                deleted.add(entry["message_id"])
-            except Exception:
-                pass
-        if tg_msg_id not in deleted:
-            try:
-                await asyncio.to_thread(tg.delete_message, self._token, chat, tg_msg_id)
-            except Exception:
-                pass
-        await self._answer_cb(cb_id, "🗑 Удалено")
 
     async def _poll_telegram(self) -> None:
         """Long-poll Telegram for replies; skip the backlog on startup."""
