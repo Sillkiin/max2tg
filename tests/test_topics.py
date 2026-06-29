@@ -1317,5 +1317,85 @@ class TelegramVoiceAttachTests(unittest.TestCase):
         self.assertEqual(att["kind"], "file")
 
 
+class MaxDeleteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delete_message_opcode_66(self):
+        import maxmsg
+        cap = {}
+
+        class C:
+            async def invoke_method(self, opcode, payload):
+                cap["op"] = opcode
+                cap["pl"] = payload
+                return {}
+
+        await maxmsg.delete_message(C(), 555, ["m1"], for_me=False)
+        self.assertEqual(cap["op"], 66)
+        self.assertEqual(cap["pl"],
+                         {"chatId": 555, "messageIds": ["m1"], "forMe": False})
+
+
+class DelCommandTests(unittest.IsolatedAsyncioTestCase):
+    def make_bridge(self):
+        return MaxToTelegramBridge({
+            "telegram_bot_token": "token",
+            "telegram_chat_id": 111,
+            "telegram_fallback_chat_id": 111,
+            "telegram_forum_chat_id": -100222,
+            "telegram_topics_enabled": True,
+            "max_login_token": "max",
+        })
+
+    async def test_del_on_own_message_deletes_for_everyone(self):
+        b = self.make_bridge()
+        b._client = object()
+        b._remember_tg_sent(700, 555, "m1")  # your sent TG msg 700 -> MAX (555,m1)
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del",
+                   "reply_to_message": {"message_id": 700}}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.delete_message") as tdel, \
+                patch("bridge.tg.send_message"):
+            await b._handle_del(message)
+        mdel.assert_awaited_once()
+        self.assertEqual(mdel.await_args.args[1], 555)        # MAX chat
+        self.assertEqual(mdel.await_args.args[2], ["m1"])     # MAX message id
+        self.assertFalse(mdel.await_args.kwargs.get("for_me"))  # for EVERYONE
+        deleted = sorted(c.args[2] for c in tdel.call_args_list)
+        self.assertEqual(deleted, [700, 800])                 # tidies reply + /del
+
+    async def test_del_without_reply_explains(self):
+        b = self.make_bridge()
+        b._client = object()
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del"}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.send_message") as say:
+            await b._handle_del(message)
+        mdel.assert_not_awaited()
+        say.assert_called()
+
+    async def test_del_on_someone_elses_message_refused(self):
+        # A forwarded (others') message is in _reply_map, not _tg_sent_to_max ->
+        # you can't delete it for everyone, so /del refuses.
+        b = self.make_bridge()
+        b._client = object()
+        b._remember(500, 555, "m1", "A", -100222, 42, "text")
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del",
+                   "reply_to_message": {"message_id": 500}}
+        with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                patch("bridge.tg.send_message") as say:
+            await b._handle_del(message)
+        mdel.assert_not_awaited()
+        say.assert_called()
+
+    async def test_handle_update_routes_del_command(self):
+        b = self.make_bridge()
+        message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del",
+                   "reply_to_message": {"message_id": 700}}
+        with patch.object(b, "_handle_del", new=AsyncMock()) as h, \
+                patch.object(b, "_handle_command", new=AsyncMock()) as cmd:
+            await b._handle_update({"message": message})
+        h.assert_awaited_once()
+        cmd.assert_not_awaited()  # /del is NOT passed to the generic command path
+
+
 if __name__ == "__main__":
     unittest.main()

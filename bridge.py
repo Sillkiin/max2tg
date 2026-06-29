@@ -1335,6 +1335,12 @@ class MaxToTelegramBridge:
             return
         text = self._telegram_outgoing_text(message)
         if text.startswith("/"):
+            parts = text.strip().lstrip("/").split(maxsplit=1)
+            cmd = parts[0].lower().split("@")[0] if parts else ""
+            if cmd in ("del", "delete"):
+                # /del as a reply to YOUR OWN message -> delete it for everyone.
+                await self._handle_del(message)
+                return
             await self._handle_command(
                 incoming_chat, message.get("message_thread_id"), text)
             return
@@ -1431,6 +1437,53 @@ class MaxToTelegramBridge:
         except Exception as exc:
             _logger.info("Could not mirror Telegram reaction to MAX msg %s: %s",
                          message_id, exc)
+
+    async def _handle_del(self, message: dict) -> None:
+        """`/del` replied to YOUR OWN relayed message -> delete it for everyone in
+        MAX (opcode 66, forMe:false), then tidy Telegram (best-effort)."""
+        chat = message.get("chat", {}).get("id")
+        thread = message.get("message_thread_id")
+
+        async def say(t: str):
+            try:
+                await asyncio.to_thread(tg.send_message, self._token, chat, t,
+                                        message_thread_id=thread)
+            except Exception:
+                pass
+
+        reply = message.get("reply_to_message")
+        if not reply:
+            await say("Ответьте /del на СВОём сообщении — удалю его у всех в MAX.")
+            return
+        target = self._tg_sent_to_max.get(reply.get("message_id"))
+        if not target:
+            await say("Удалить у всех можно только ВАШИ сообщения (которые вы "
+                      "отправили через тему). На это сообщение — не выйдет.")
+            return
+        if self._client is None:
+            await say("MAX сейчас не подключён — повторите позже.")
+            return
+        try:
+            await maxmsg.delete_message(self._client, target["chat_id"],
+                                        [target["message_id"]], for_me=False)
+        except Exception as exc:
+            _logger.warning("Could not delete-for-all MAX msg %s: %s",
+                            target.get("message_id"), exc)
+            await say(f"Не удалось удалить в MAX: {exc}")
+            return
+        self._tg_sent_to_max.pop(reply.get("message_id"), None)
+        # Tidy Telegram: drop the /del command and your message. Needs the bot's
+        # delete-messages right; if it lacks it, tell the user so they're not left
+        # wondering whether it worked.
+        cleaned = True
+        for mid in (reply.get("message_id"), message.get("message_id")):
+            try:
+                await asyncio.to_thread(tg.delete_message, self._token, chat, mid)
+            except Exception:
+                cleaned = False
+        if not cleaned:
+            await say("🗑 Удалено в MAX у всех. (Своё сообщение и /del уберите "
+                      "вручную — у бота нет права удалять сообщения здесь.)")
 
     async def _poll_telegram(self) -> None:
         """Long-poll Telegram for replies; skip the backlog on startup."""
