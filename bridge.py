@@ -102,6 +102,10 @@ _MEDIA_SENDERS = {
     "sticker": (tg.send_sticker, False),
 }
 
+# Attach kinds that need a WS round-trip to turn an id into a downloadable URL
+# before sending (vs _MEDIA_SENDERS kinds that already carry a direct url).
+RESOLVABLE_KINDS = frozenset({"file_resolve", "video_resolve", "audio_resolve"})
+
 
 def _extract_own_id(login_response: dict) -> int | None:
     profile = login_response.get("payload", {}).get("profile", {})
@@ -679,7 +683,7 @@ class MaxToTelegramBridge:
             return False
 
         text, parsed = _message_content(message)
-        resolvable = {"file_resolve", "video_resolve"}
+        resolvable = RESOLVABLE_KINDS
         media = [item for item in parsed if item.kind in _MEDIA_SENDERS]
         to_resolve = [item for item in parsed if item.kind in resolvable]
         notes = [
@@ -827,7 +831,7 @@ class MaxToTelegramBridge:
         if primary is None:
             return  # media-only with no caption: nothing textual to mirror
         text, parsed = _message_content(message)
-        resolvable = {"file_resolve", "video_resolve"}
+        resolvable = RESOLVABLE_KINDS
         notes = [p.text for p in parsed
                  if p.kind not in _MEDIA_SENDERS and p.kind not in resolvable]
         sender = await self._message_sender_name(client, message.get("sender"))
@@ -929,7 +933,7 @@ class MaxToTelegramBridge:
 
     async def _forward(self, client, header, text, parsed,
                        chat_id, max_message_id, sender, chat_title, chat_type):
-        resolvable = {"file_resolve", "video_resolve"}
+        resolvable = RESOLVABLE_KINDS
         media = [p for p in parsed if p.kind in _MEDIA_SENDERS]
         to_resolve = [p for p in parsed if p.kind in resolvable]
         notes = [p.text for p in parsed
@@ -1026,6 +1030,15 @@ class MaxToTelegramBridge:
                 msg_id = await asyncio.to_thread(
                     tg.send_document, self._token, telegram_chat_id, url,
                     caption, item.filename, message_thread_id=thread_id)
+            elif item.kind == "audio_resolve":
+                # Voice message: resolve to an opus/ogg URL and send it as a
+                # native Telegram voice (m4a/mp3 fall back to a playable audio).
+                url, mime = await mediamax.resolve_audio_url(
+                    client, item.file_id, chat_id, max_message_id, item.token)
+                sender_fn = tg.send_voice if mime == "audio/ogg" else tg.send_audio
+                msg_id = await asyncio.to_thread(
+                    sender_fn, self._token, telegram_chat_id, url, caption,
+                    message_thread_id=thread_id)
             else:  # video_resolve
                 url = await mediamax.resolve_video_url(
                     client, item.video_id, chat_id, max_message_id)

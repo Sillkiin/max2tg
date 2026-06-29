@@ -1124,5 +1124,126 @@ class ReverseMirrorTests(unittest.IsolatedAsyncioTestCase):
                          {"chat_id": 555, "message_id": "M99"})
 
 
+class VoiceAttachTests(unittest.TestCase):
+    def test_mobile_voice_becomes_audio_resolve(self):
+        import attaches
+        parsed = attaches.parse({"attaches": [
+            {"_type": "UNSUPPORTED", "audioId": 123, "token": "tok",
+             "duration": 4280}]})
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0].kind, "audio_resolve")
+        self.assertEqual(parsed[0].file_id, 123)
+        self.assertEqual(parsed[0].token, "tok")
+        self.assertIn("Голосовое", parsed[0].text)
+
+    def test_voice_with_direct_url_stays_voice(self):
+        import attaches
+        parsed = attaches.parse({"attaches": [
+            {"_type": "AUDIO", "audioId": 1, "url": "https://x/a.ogg",
+             "duration": 2000}]})
+        self.assertEqual(parsed[0].kind, "voice")
+        self.assertEqual(parsed[0].url, "https://x/a.ogg")
+
+
+class ResolveAudioTests(unittest.IsolatedAsyncioTestCase):
+    class _Client:
+        def __init__(self, payload):
+            self._payload = payload
+            self.opcode = None
+            self.sent = None
+
+        async def invoke_method(self, opcode, payload):
+            self.opcode = opcode
+            self.sent = payload
+            return {"payload": self._payload}
+
+    async def test_prefers_opus_and_sends_opcode_301(self):
+        import mediamax
+        c = self._Client({"opus": "https://a/x.ogg", "m4a": "https://a/x.m4a"})
+        url, mime = await mediamax.resolve_audio_url(c, 123, 555, "m1", "tok")
+        self.assertEqual(c.opcode, 301)
+        self.assertEqual(c.sent, {"audioId": 123, "chatId": 555,
+                                  "messageId": "m1", "token": "tok"})
+        self.assertEqual((url, mime), ("https://a/x.ogg", "audio/ogg"))
+
+    async def test_falls_back_to_m4a(self):
+        import mediamax
+        url, mime = await mediamax.resolve_audio_url(
+            self._Client({"m4a": "https://a/x.m4a"}), 1, 2, "3")
+        self.assertEqual((url, mime), ("https://a/x.m4a", "audio/mp4"))
+
+    async def test_omits_token_when_absent(self):
+        import mediamax
+        c = self._Client({"opus": "u"})
+        await mediamax.resolve_audio_url(c, 1, 2, "3")
+        self.assertNotIn("token", c.sent)
+
+    async def test_no_source_raises(self):
+        import mediamax
+        with self.assertRaises(RuntimeError):
+            await mediamax.resolve_audio_url(self._Client({}), 1, 2, "3")
+
+
+class VoiceForwardTests(unittest.IsolatedAsyncioTestCase):
+    def make_bridge(self):
+        return MaxToTelegramBridge({
+            "telegram_bot_token": "token",
+            "telegram_chat_id": 111,
+            "telegram_fallback_chat_id": 111,
+            "telegram_forum_chat_id": -100222,
+            "telegram_topics_enabled": True,
+            "max_login_token": "max",
+        })
+
+    def _ctx(self):
+        # (client, header, chat_id, max_message_id, sender, telegram_chat_id,
+        #  thread_id, in_topic, is_channel)
+        return (object(), "MAX | A (чат 555)", 555, "m1", "A", -100222, 42,
+                True, False)
+
+    async def test_opus_is_sent_as_telegram_voice(self):
+        import attaches
+        bridge = self.make_bridge()
+        item = attaches.ParsedAttach("audio_resolve", "🎤 Голосовое (4 с)",
+                                     file_id=123, token="tok")
+        with patch("bridge.mediamax.resolve_audio_url",
+                   new=AsyncMock(return_value=("https://a/x.ogg", "audio/ogg"))), \
+                patch("bridge.tg.send_voice", return_value=900) as sv, \
+                patch("bridge.tg.send_audio") as sa:
+            await bridge._send_resolved_item(item, True, self._ctx())
+        sv.assert_called_once()
+        self.assertEqual(sv.call_args.args[2], "https://a/x.ogg")
+        sa.assert_not_called()
+        # recorded for edit/delete/reaction mirroring
+        self.assertIn((555, "m1"), bridge._forward_map)
+
+    async def test_m4a_is_sent_as_telegram_audio(self):
+        import attaches
+        bridge = self.make_bridge()
+        item = attaches.ParsedAttach("audio_resolve", "🎤 Голосовое",
+                                     file_id=9, token="t")
+        with patch("bridge.mediamax.resolve_audio_url",
+                   new=AsyncMock(return_value=("https://a/x.m4a", "audio/mp4"))), \
+                patch("bridge.tg.send_voice") as sv, \
+                patch("bridge.tg.send_audio", return_value=901) as sa:
+            await bridge._send_resolved_item(item, True, self._ctx())
+        sa.assert_called_once()
+        sv.assert_not_called()
+
+    async def test_resolve_failure_falls_back_to_note(self):
+        import attaches
+        bridge = self.make_bridge()
+        item = attaches.ParsedAttach("audio_resolve", "🎤 Голосовое",
+                                     file_id=9, token="t")
+        with patch("bridge.mediamax.resolve_audio_url",
+                   new=AsyncMock(side_effect=RuntimeError("no source"))), \
+                patch("bridge.tg.send_voice") as sv, \
+                patch.object(bridge, "_send_note",
+                             new=AsyncMock(return_value=902)) as note:
+            await bridge._send_resolved_item(item, True, self._ctx())
+        sv.assert_not_called()
+        note.assert_awaited_once()
+
+
 if __name__ == "__main__":
     unittest.main()

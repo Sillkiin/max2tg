@@ -12,13 +12,15 @@ from pathlib import PurePosixPath
 @dataclass(frozen=True)
 class ParsedAttach:
     kind: str            # photo, animation, sticker, video, document, voice,
-                         # audio, link, note, file_resolve, video_resolve
+                         # audio, link, note, file_resolve, video_resolve,
+                         # audio_resolve
     text: str            # human-readable description (caption / fallback)
     url: str | None = None
     filename: str | None = None
-    file_id: int | str | None = None   # for file_resolve (WS resolve to a URL)
+    file_id: int | str | None = None   # for file_resolve / audio_resolve (audioId)
     video_id: int | str | None = None  # for video_resolve
     size: int | None = None            # bytes, when known (upload-limit checks)
+    token: str | None = None           # audio_resolve: the attach access token
 
 
 def _safe_filename(name: object) -> str:
@@ -108,9 +110,14 @@ def _parse_one(attach: dict) -> ParsedAttach | None:
         label = f"🎤 Голосовое{suffix}"
         if url:
             return ParsedAttach("voice", label, url)
-        # MAX marks mobile voices as UNSUPPORTED with no url and no resolvable
-        # source (the file opcode returns file.not.found), so we can only label
-        # them — the web API itself can't play these.
+        # Mobile voices arrive as UNSUPPORTED with only an audioId+token and no
+        # direct url. They resolve via the audio opcode (301) to an opus/ogg URL
+        # — the file opcode (88) returns file.not.found; that earlier dead end
+        # was the wrong opcode, not an API limit.
+        audio_id = attach.get("audioId") or attach.get("id")
+        if audio_id is not None:
+            return ParsedAttach("audio_resolve", label, file_id=audio_id,
+                                token=attach.get("token"))
         return ParsedAttach("note", f"{label} — открыть в MAX")
 
     if kind == "FILE":

@@ -19,6 +19,14 @@ _logger = logging.getLogger(__name__)
 
 FILE_RESOLVE_OPCODE = 88
 VIDEO_RESOLVE_OPCODE = 83
+# Voice/audio messages (UNSUPPORTED attach with audioId) resolve here, NOT via
+# the file opcode 88 (which returns file.not.found for audio). Reverse-engineered
+# from web.max.ru: getAudioSources -> invoke(301). Response is {opus?, m4a?, mp3?}
+# of directly-fetchable CDN URLs; opus is audio/ogg = Telegram's native voice.
+AUDIO_RESOLVE_OPCODE = 301
+# Preference order + the Telegram-facing mime for each source key.
+_AUDIO_SOURCE_MIMES = (("opus", "audio/ogg"), ("m4a", "audio/mp4"),
+                       ("mp3", "audio/mpeg"))
 # Upload-slot opcodes differ by media type (reverse-engineered from web.max.ru).
 PHOTO_UPLOAD_SLOT_OPCODE = 80
 VIDEO_UPLOAD_SLOT_OPCODE = 82
@@ -65,6 +73,26 @@ async def resolve_video_url(client: MaxClient, video_id: int | str,
     if not best_url:
         raise RuntimeError(f"video resolve returned no MP4 source: {payload}")
     return best_url
+
+
+async def resolve_audio_url(client: MaxClient, audio_id: int | str,
+                            chat_id: int | str, message_id: int | str,
+                            token: str | None = None) -> tuple[str, str]:
+    """Resolve a voice/audio attachment to a playable URL (opcode 301).
+
+    Returns (url, mime). Prefers opus (audio/ogg → a native Telegram voice);
+    falls back to m4a/mp3 (sent as audio). Raises if no source is returned.
+    """
+    payload = {"audioId": audio_id, "chatId": chat_id, "messageId": message_id}
+    if token is not None:
+        payload["token"] = token
+    response = await client.invoke_method(opcode=AUDIO_RESOLVE_OPCODE, payload=payload)
+    result = response.get("payload", {}) if isinstance(response, dict) else {}
+    for key, mime in _AUDIO_SOURCE_MIMES:
+        url = result.get(key)
+        if isinstance(url, str) and url:
+            return url, mime
+    raise RuntimeError(f"audio resolve returned no source: {result}")
 
 
 def _content_disposition(filename: str) -> str:
