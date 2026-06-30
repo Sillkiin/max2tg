@@ -9,8 +9,12 @@ from bridge import MaxToTelegramBridge
 from config import apply_dotenv, load_config
 from fileperms import restrict_to_owner
 from setup_wizard import run_setup
+from singleton import acquire_single_instance
 
 LOG_PATH = Path(__file__).parent / "bridge.log"
+LOCK_PATH = Path(__file__).parent / "max2tg.lock"
+
+_logger = logging.getLogger(__name__)
 
 # Telegram bot token (bot<digits>:<base64ish>) and URL secrets (?token=/?sig=).
 _BOT_TOKEN_RE = re.compile(r"bot\d{5,}:[A-Za-z0-9_-]{20,}")
@@ -64,6 +68,13 @@ def _configure() -> None:
 
 def main() -> None:
     _configure()
+    # Single-instance guard: a duplicate bridge double-forwards every message.
+    # An OS-level lock catches duplicates the launcher's process scan can't see
+    # (e.g. a boot-task instance running in another Windows session).
+    if not acquire_single_instance(LOCK_PATH):
+        _logger.warning("Another max2tg instance already holds the lock; exiting.")
+        print("Мост уже запущен (другой экземпляр) — этот процесс выходит.")
+        return
     apply_dotenv()  # load a local .env file if present (any launch method)
     config = load_config()
     if config is None:

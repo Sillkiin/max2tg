@@ -362,6 +362,7 @@ class MainEntryPointTests(unittest.TestCase):
         fake_stdin = Mock()
         fake_stdin.isatty.return_value = False
         with patch("main._configure"), \
+                patch("main.acquire_single_instance", return_value=True), \
                 patch("main.apply_dotenv"), \
                 patch("main.load_config", return_value=None), \
                 patch.object(main.sys, "stdin", fake_stdin), \
@@ -382,6 +383,7 @@ class MainEntryPointTests(unittest.TestCase):
         # its return value is never awaited and no orphan coroutine is created.
         bridge_inst.run_forever = Mock()
         with patch("main._configure"), \
+                patch("main.acquire_single_instance", return_value=True), \
                 patch("main.apply_dotenv"), \
                 patch("main.load_config", return_value=None), \
                 patch.object(main.sys, "stdin", fake_stdin), \
@@ -398,6 +400,7 @@ class MainEntryPointTests(unittest.TestCase):
         bridge_inst = Mock()
         bridge_inst.run_forever = Mock()
         with patch("main._configure"), \
+                patch("main.acquire_single_instance", return_value=True), \
                 patch("main.apply_dotenv"), \
                 patch("main.load_config", return_value=cfg), \
                 patch("main.run_setup") as wizard, \
@@ -413,6 +416,7 @@ class MainEntryPointTests(unittest.TestCase):
         bridge_inst = Mock()
         bridge_inst.run_forever = Mock()
         with patch("main._configure"), \
+                patch("main.acquire_single_instance", return_value=True), \
                 patch("main.apply_dotenv"), \
                 patch("main.load_config", return_value=cfg), \
                 patch("main.MaxToTelegramBridge", return_value=bridge_inst), \

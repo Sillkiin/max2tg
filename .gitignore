@@ -4,6 +4,7 @@ __pycache__/
 *.log
 config.json
 state.json
+max2tg.lock
 .env
 _*.py
 _*.txt
