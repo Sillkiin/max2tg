@@ -43,7 +43,7 @@
   <sub><b>1.</b> пуши из MAX на локскрине iPhone&nbsp;·&nbsp;<b>2.</b> каждый чат — отдельная тема&nbsp;·&nbsp;<b>3.</b> ответ из Telegram уходит обратно в MAX&nbsp;&nbsp;<i>(макеты)</i></sub>
 </p>
 <p align="center">
-  <sub>Видно, что сообщения именно из MAX: мост помечает каждое — <code>MAX | Имя (чат …)</code>, голосовые как <code>🎤 Голосовое (N с) — открыть в MAX</code>, а доставку ответа подтверждает <code>✅ Отправлено в MAX</code>. Это реальный формат вывода моста.</sub>
+  <sub>Видно, что сообщения именно из MAX: мост помечает каждое — <code>MAX | Имя (чат …)</code>, голосовые <b>играют прямо в Telegram</b>, а доставку ответа подтверждает <code>✅ Отправлено в MAX</code>. Это реальный формат вывода моста.</sub>
 </p>
 
 ## Содержание
@@ -67,8 +67,10 @@
 | 🔔 **Уведомления** | Пуши о новых сообщениях MAX приходят как обычные уведомления Telegram — на iOS это единственный способ их получать |
 | ↔️ **Двусторонний** | Не просто пересылка — отвечаете **из Telegram**, и сообщение уходит в чат MAX |
 | 🗂 **Темы** | Каждый MAX-чат = отдельная тема Telegram-форума с именем собеседника |
-| 🎮 **Команды** | Вступать в каналы и искать людей прямо из Telegram — `/join`, `/find` |
+| 🎮 **Команды** | Управляйте MAX из Telegram — `/dm`, `/join`, и `/del` (удалить своё сообщение у всех) |
 | 🖼 **Медиа** | Фото, видео, файлы, стикеры — в обе стороны |
+| 🎤 **Голосовые** | Из MAX — **играют** в Telegram; из Telegram — уходят в MAX **нативным** голосовым (волна + длительность) |
+| 🔄 **Правки · удаления · реакции** | Зеркалятся в **обе стороны**: изменили / удалили / реагировали в одном — видно в другом |
 | 🔒 **Приватно** | Токены и переписка остаются у вас; ничего не уходит на чужие серверы |
 | 🆓 **Бесплатно** | Без подписок, открытый код (MIT) |
 | 🖥 **Где угодно** | Windows, старый Android (Termux) или сервер 24/7 |
@@ -77,8 +79,8 @@
 
 | Направление | Содержимое |
 |---|---|
-| **MAX → Telegram** | текст, фото, видео, файлы, стикеры, пометки о голосовых |
-| **Telegram → MAX** | текст (ответом), фото, видео, файлы |
+| **MAX → Telegram** | текст, фото, видео, файлы, стикеры, **голосовые (играют)**, **правки · удаления · реакции** |
+| **Telegram → MAX** | текст, фото, видео, файлы, **нативные голосовые**, **правки · реакции**, удаление через `/del` |
 
 ---
 
@@ -144,6 +146,7 @@ copy(JSON.parse(localStorage.__oneme_auth).token)
 |---|---|
 | `/dm <телефон или id> <текст>` | **Написать человеку.** Найду по номеру и напишу; его ответ придёт отдельной темой. |
 | `/join <ссылка или @username>` | **Вступить в канал / группу / чат.** Появится отдельной темой. |
+| `/del` (ответом на своё) | **Удалить своё сообщение у всех в MAX.** Ответьте `/del` (или `/delete`) на отправленное вами сообщение в теме — оно исчезнет у собеседника. |
 | `/help` · `/start` | Справка и приветствие. |
 
 Просто: **люди — `/dm` по телефону, каналы — `/join` по ссылке.**
@@ -232,8 +235,9 @@ docker compose up -d      # подтянет ghcr.io/sillkiin/max2tg:latest
 - ⚙️ **Неофициальный API MAX** (через [vkmax](https://github.com/nsdkinx/vkmax) —
   официального API для личных аккаунтов нет). Для MAX это выглядит как вход через
   веб-версию; теоретически он может ограничить сессию.
-- 🎤 **Голосовые из MAX** приходят подписью «🎤 Голосовое (N с)» — само аудио
-  недоступно даже веб-клиенту MAX.
+- 🎤 **Голосовые** работают в обе стороны через **недокументированный** аудио-эндпоинт
+  MAX (из MAX играют в Telegram, из Telegram уходят нативным голосовым) — если MAX
+  поменяет его, понадобится правка.
 - 📦 **Файлы и видео до ~50 МБ** (лимит Telegram-ботов); крупнее — уведомление
   «открыть в MAX».
 - 🔑 **Токены** лежат локально в `config.json` (в `.gitignore`, не коммитятся).
@@ -252,7 +256,8 @@ docker compose up -d      # подтянет ghcr.io/sillkiin/max2tg:latest
 | `main.py` / `setup_wizard.py` | точка входа и мастер настройки |
 | `bridge.py` | ядро: слушает MAX, маршрутизирует, принимает ответы |
 | `max_client.py` | WebSocket-клиент MAX (браузерные заголовки, вход по токену) |
-| `attaches.py` / `mediamax.py` | разбор и загрузка медиа MAX |
+| `attaches.py` / `mediamax.py` | разбор и загрузка медиа MAX (фото/видео/файлы/голосовые) |
+| `maxmsg.py` | правки / удаления / реакции в MAX (опкоды 66/67/178/179) |
 | `tg.py` | мини-клиент Telegram Bot API |
 | `state.py` / `config.py` | карта тем и конфигурация |
 | `Dockerfile` / `docker-compose*.yml` / `DEPLOY.md` | деплой |
@@ -281,12 +286,14 @@ Docker-образ `ghcr.io/sillkiin/max2tg:latest`. Для локальной с
 > have) **with normal push notifications** — effectively the only way to use MAX
 > on iOS.
 
-- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers —
+- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers, **voice** —
   are forwarded to Telegram; reply right from Telegram and it lands in the MAX chat.
+- **Edits, deletions and reactions mirror both ways**; MAX voice plays in Telegram and
+  Telegram voice notes arrive in MAX as a native voice message.
 - **Topics.** Each MAX chat becomes its own Telegram forum topic, named after the contact.
-- **Commands** (shown in the "/" menu): `/join <link | @username>` — join a MAX
-  channel/group/chat · `/find <phone | @username | link | id>` — look up a person or
-  channel and get their id · `/help` — command reference.
+- **Commands** (shown in the "/" menu): `/dm <phone | id> <text>` — message a person ·
+  `/join <link | @username>` — join a MAX channel/group/chat · `/del` (reply to your own
+  message) — delete it for everyone in MAX · `/help` — command reference.
 - **Private & free.** Tokens and messages stay on your machine. Open-source (MIT).
 - **Runs anywhere.** Windows, old Android (Termux), or a 24/7 server. Pull the
   ready image: `docker pull ghcr.io/sillkiin/max2tg:latest`.
@@ -295,8 +302,8 @@ Docker-образ `ghcr.io/sillkiin/max2tg:latest`. Для локальной с
 and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console:
 `copy(JSON.parse(localStorage.__oneme_auth).token)`).
 
-> ⚠️ Uses MAX's **unofficial** web API. Voice messages from MAX are only labeled —
-> MAX's own web client can't play them either. Use at your own risk.
+> ⚠️ Uses MAX's **unofficial** web API (voice relies on an undocumented audio
+> endpoint, reverse-engineered from the apps). Use at your own risk.
 </details>
 
 ---

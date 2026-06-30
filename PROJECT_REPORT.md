@@ -10,25 +10,20 @@ UX: каждая тема Telegram = отдельный MAX-диалог, гру
 
 ## Текущий статус
 
-Мост запущен и работает локально.
+Мост запущен и работает локально (один экземпляр; PID меняется при каждом
+рестарте — смотреть через `Get-CimInstance Win32_Process` или `bridge.log`).
 
-Последний известный процесс:
+Тесты: 478 (unittest), покрытие ~88%; ruff + bandit чисто.
 
-- parent PID: `25844`
-- child PID: `25904`
+Реализовано (двусторонне): текст, медиа, **голосовые** (играют в Telegram /
+нативные в MAX), **правки**, **удаления**, **реакции**, команда **`/del`**
+(удалить своё сообщение у всех в MAX). Команды управления: `/dm`, `/join`.
 
-Лог:
+Файлы:
 
-- `C:\Claude\max2tg\bridge.log`
-
-Состояние:
-
-- `C:\Claude\max2tg\state.json`
-
-Конфиг:
-
-- `C:\Claude\max2tg\config.json`
-- содержит live-токены, не печатать и не коммитить.
+- лог — `C:\Claude\max2tg\bridge.log`
+- состояние — `C:\Claude\max2tg\state.json`
+- конфиг — `C:\Claude\max2tg\config.json` (live-токены, не печатать и не коммитить)
 
 ## Основная архитектура
 
@@ -79,7 +74,7 @@ Message sending:
 Polling:
 
 - `getUpdates`;
-- allowed updates: `message`.
+- allowed updates: `message`, `edited_message`, `message_reaction`.
 
 Forum topics:
 
