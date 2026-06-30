@@ -5,9 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import state as _state_module
 from bridge import MaxToTelegramBridge, _contact_display_name, _message_content
 from config import normalize_config
 from state import BridgeState, normalize_topic_title
+
+# Tests must never touch the real state.json (the live bridge writes it). Redirect
+# the default state path to a throwaway temp so a default-constructed bridge that
+# now persists its tg_sent map cannot race or clobber the live file.
+_state_module.STATE_PATH = Path(tempfile.gettempdir()) / "max2tg_test_topics_state.json"
 
 
 class DotenvTests(unittest.TestCase):
@@ -1447,6 +1453,28 @@ class DelCommandTests(unittest.IsolatedAsyncioTestCase):
             await b._handle_del(message)
         mdel.assert_awaited_once()  # MAX delete still happened
         self.assertIn("вручную", say.call_args.args[2])
+
+    async def test_del_works_after_restart_via_persisted_map(self):
+        # Persistence: a message sent before a restart stays deletable, because the
+        # TG->MAX map is saved to disk and reloaded by _load_tg_sent() on startup.
+        with tempfile.TemporaryDirectory() as d:
+            statepath = Path(d) / "state.json"
+            b1 = self.make_bridge()
+            b1._state = BridgeState(statepath)
+            b1._remember_tg_sent(700, 555, "m1")     # persists to statepath
+            b2 = self.make_bridge()                   # simulate a restart
+            b2._client = object()
+            b2._state = BridgeState(statepath)
+            b2._load_tg_sent()                        # reload from disk
+            message = {"chat": {"id": -100222}, "message_id": 800, "text": "/del",
+                       "reply_to_message": {"message_id": 700}}
+            with patch("bridge.maxmsg.delete_message", new=AsyncMock()) as mdel, \
+                    patch("bridge.tg.delete_message"), \
+                    patch("bridge.tg.send_message"):
+                await b2._handle_del(message)
+        mdel.assert_awaited_once()
+        self.assertEqual(mdel.await_args.args[2], ["m1"])
+        self.assertEqual(mdel.await_args.kwargs["for_me"], False)
 
 
 if __name__ == "__main__":

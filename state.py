@@ -19,8 +19,10 @@ _logger = logging.getLogger(__name__)
 class BridgeState:
     """Stores MAX chat -> Telegram topic mappings on disk."""
 
-    def __init__(self, path: Path = STATE_PATH):
-        self.path = path
+    def __init__(self, path: Path | None = None):
+        # Read STATE_PATH at call time (not as a default arg) so tests can
+        # redirect it to a temp file and never touch the real state.json.
+        self.path = path if path is not None else STATE_PATH
         self._data: dict[str, Any] = {"topics": {}}
         self.load()
 
@@ -121,6 +123,18 @@ class BridgeState:
             self.save()
             return True
         return False
+
+    def get_tg_sent(self) -> dict[str, Any]:
+        """The persisted "my Telegram message -> MAX message" map (string keys),
+        empty when absent. Lets /del work on messages sent before a restart."""
+        stored = self._data.get("tg_sent")
+        return stored if isinstance(stored, dict) else {}
+
+    def set_tg_sent(self, mapping: dict) -> None:
+        """Persist the "my TG message -> MAX message" map next to the topics.
+        Keys are coerced to str for JSON; values are {chat_id, message_id}."""
+        self._data["tg_sent"] = {str(k): v for k, v in mapping.items()}
+        self.save()
 
 
 def normalize_topic_title(value: str, fallback: str) -> str:

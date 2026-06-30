@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import bridge
+import state as _state_module
 from attaches import ParsedAttach
 from bridge import (
     MaxToTelegramBridge,
@@ -19,6 +20,11 @@ from bridge import (
     _quote_snippet,
 )
 from state import BridgeState
+
+# Tests must never touch the real state.json (the live bridge writes it). Redirect
+# the default state path to a throwaway temp so a default-constructed bridge that
+# now persists its tg_sent map cannot race or clobber the live file.
+_state_module.STATE_PATH = Path(tempfile.gettempdir()) / "max2tg_test_extra_state.json"
 
 
 def make_bridge():

@@ -83,6 +83,13 @@ class StateRoundTripTests(unittest.TestCase):
         self.assertEqual(topic["last_sender"], "ivan")
         self.assertIn("created_at", topic)
 
+    def test_tg_sent_persists_across_instances(self):
+        st = self._state()
+        st.set_tg_sent({700: {"chat_id": 555, "message_id": "m1"}})
+        reloaded = state.BridgeState(path=st.path)  # simulate a restart
+        self.assertEqual(reloaded.get_tg_sent(),
+                         {"700": {"chat_id": 555, "message_id": "m1"}})
+
     def test_get_topic_coerces_id_to_str_and_returns_none_when_absent(self):
         st = self._state()
         st.save_topic("123", thread_id=1, title="t", chat_type="dialog")

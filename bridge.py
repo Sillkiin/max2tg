@@ -360,6 +360,32 @@ class MaxToTelegramBridge:
         self._tg_sent_to_max.move_to_end(tg_message_id)
         while len(self._tg_sent_to_max) > TG_SENT_MAP_LIMIT:
             self._tg_sent_to_max.popitem(last=False)
+        self._persist_tg_sent()
+
+    def _load_tg_sent(self) -> None:
+        """Restore the user's "my TG message -> MAX message" map from disk so a
+        /del (or a Telegram edit) works on messages sent before a restart. Called
+        once at startup; keeps the newest TG_SENT_MAP_LIMIT entries."""
+        for key, value in self._state.get_tg_sent().items():
+            try:
+                tg_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, dict) and value.get("message_id") is not None:
+                self._tg_sent_to_max[tg_id] = {
+                    "chat_id": value.get("chat_id"),
+                    "message_id": value.get("message_id"),
+                }
+        while len(self._tg_sent_to_max) > TG_SENT_MAP_LIMIT:
+            self._tg_sent_to_max.popitem(last=False)
+
+    def _persist_tg_sent(self) -> None:
+        """Best-effort save of the map; a persistence hiccup must never break the
+        message relay, so any failure is logged and swallowed."""
+        try:
+            self._state.set_tg_sent(self._tg_sent_to_max)
+        except Exception as exc:
+            _logger.warning("Could not persist tg_sent map: %s", exc)
 
     def _lookup_max_message(self, tg_message_id) -> tuple:
         """The MAX (chat_id, message_id) a Telegram message maps to — whether it
@@ -1475,6 +1501,7 @@ class MaxToTelegramBridge:
         _logger.info("Deleted MAX message %s in chat %s for everyone (/del, opcode 66)",
                      target.get("message_id"), target.get("chat_id"))
         self._tg_sent_to_max.pop(reply.get("message_id"), None)
+        self._persist_tg_sent()
         # Tidy Telegram: drop the /del command and your message. Needs the bot's
         # delete-messages right; if it lacks it, tell the user so they're not left
         # wondering whether it worked.
@@ -1619,6 +1646,7 @@ class MaxToTelegramBridge:
 
     async def run_forever(self) -> None:
         self._restrict_sensitive_files()
+        self._load_tg_sent()  # restore /del + edit targets from a prior run
         await self._register_commands()
         await self._resolve_bot_id()
         await asyncio.gather(self._max_loop(), self._poll_telegram())
