@@ -1,36 +1,55 @@
-# MAX → Telegram 🚀
+<h1 align="center">MAX&nbsp;→&nbsp;Telegram&nbsp;🚀</h1>
 
 <p align="center">
   <img src="assets/hero.svg" alt="max2tg — мост между мессенджером MAX и Telegram" width="820">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Sillkiin/max2tg/actions/workflows/ci-docker.yml"><img src="https://github.com/Sillkiin/max2tg/actions/workflows/ci-docker.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/Sillkiin/max2tg/pkgs/container/max2tg"><img src="https://img.shields.io/badge/ghcr.io-max2tg%3Alatest-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/Windows%20·%20Android%20·%20Docker-informational" alt="Platforms">
+  <b>Весь ваш MAX — в Telegram. С пушами, голосовыми и ответом в один свайп.</b>
 </p>
 
 <p align="center">
-  <b>Читайте и отвечайте на сообщения мессенджера MAX (max.ru) прямо в Telegram.</b><br>
-  Двусторонний · медиа · отдельная тема на каждый чат · бесплатно · self-hosted
+  🔔 уведомления&nbsp;·&nbsp;↔️ двусторонний&nbsp;·&nbsp;🎤 голосовые в обе стороны&nbsp;·&nbsp;🔄 правки/реакции вживую&nbsp;·&nbsp;🗂 тема на каждый чат&nbsp;·&nbsp;🔒 self-hosted&nbsp;·&nbsp;🆓 бесплатно
+</p>
+
+<p align="center">
+  <a href="https://github.com/Sillkiin/max2tg/actions/workflows/ci-docker.yml"><img src="https://github.com/Sillkiin/max2tg/actions/workflows/ci-docker.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/tests-478%20passing-2ea44f?logo=pytest&logoColor=white" alt="tests">
+  <img src="https://img.shields.io/badge/coverage-88%25-2ea44f" alt="coverage">
+  <a href="https://github.com/Sillkiin/max2tg/pkgs/container/max2tg"><img src="https://img.shields.io/badge/ghcr.io-max2tg%3Alatest-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639" alt="MIT"></a>
+</p>
+
+<p align="center">
+  <a href="#-быстрый-старт"><b>⚡ Запустить за 5 минут</b></a>
+  &nbsp;·&nbsp; <a href="#-что-умеет">Возможности</a>
+  &nbsp;·&nbsp; <a href="#-режим-тем">Режим тем</a>
   &nbsp;·&nbsp; 🇬🇧 <a href="#-in-english">In English</a>
 </p>
 
 ---
 
-`max2tg` — личный мост: зеркалит ваш аккаунт **MAX** в **Telegram**. Входящие
-сообщения, фото, видео, файлы и стикеры прилетают в Telegram, а ответить можно
-прямо оттуда — ответ уходит в нужный чат MAX.
+<p align="center">
+  <b>Мессенджер MAX неудобен, а на iPhone его вообще нет в App Store.</b><br>
+  <code>max2tg</code> зеркалит ваш аккаунт <b>MAX (max.ru)</b> в <b>Telegram</b> — целиком и в обе стороны.<br>
+  Сообщения, медиа, стикеры и даже <b>голосовые</b> прилетают в привычный Telegram с нормальными
+  уведомлениями. Отвечаете прямо оттуда — свайп, и сообщение уходит в нужный чат MAX.<br>
+  <b>Никаких чужих серверов: всё крутится у вас.</b>
+</p>
 
-> ## <img src="assets/apple.svg" height="22" align="top"> Для пользователей iPhone / iPad
->
-> **MAX удалён из App Store** — на iOS его официально не установить, и нормально
-> пользоваться MAX на Apple сейчас по сути невозможно. **`max2tg` это решает:**
-> все ваши диалоги MAX приходят в **Telegram**, который у вас уже есть, —
-> **с обычными push-уведомлениями** 🔔, поиском и нормальным клиентом. Отвечать
-> тоже можно прямо из Telegram. По факту это **единственный рабочий способ**
-> читать и писать в MAX с iPhone.
+---
+
+## <img src="assets/apple.svg" height="24" align="top"> Для iPhone / iPad — это **единственный** рабочий способ
+
+**MAX удалён из App Store.** Официально на iOS его не поставить и нормально не попользоваться.
+`max2tg` это решает — раз и навсегда:
+
+|  | 🚫 MAX на iPhone «как есть» | ✅ С `max2tg` |
+|---|---|---|
+| **Установка** | в App Store нет | ничего ставить не надо — у вас уже есть Telegram |
+| **Уведомления** | нет пушей | 🔔 обычные пуши Telegram |
+| **Чтение/ответы** | нечем | 💬 поиск, темы, ответ свайпом |
+| **Голосовые** | не послушать | ▶️ играют прямо в чате |
 
 <p align="center">
   <img src="assets/shot-notification.svg" width="232" alt="Пуш-уведомление MAX в Telegram на экране iPhone">
@@ -42,86 +61,80 @@
 <p align="center">
   <sub><b>1.</b> пуши из MAX на локскрине iPhone&nbsp;·&nbsp;<b>2.</b> каждый чат — отдельная тема&nbsp;·&nbsp;<b>3.</b> ответ из Telegram уходит обратно в MAX&nbsp;&nbsp;<i>(макеты)</i></sub>
 </p>
-<p align="center">
-  <sub>Видно, что сообщения именно из MAX: мост помечает каждое — <code>MAX | Имя (чат …)</code>, голосовые <b>играют прямо в Telegram</b>, а доставку ответа подтверждает <code>✅ Отправлено в MAX</code>. Это реальный формат вывода моста.</sub>
-</p>
-
-## Содержание
-
-- [Возможности](#возможности)
-- [Быстрый старт](#быстрый-старт)
-- [⭐ Режим тем](#-режим-тем)
-- [🎮 Команды](#-команды)
-- [Запуск на сервере 24/7](#запуск-на-сервере-247)
-- [Вопросы и ответы](#вопросы-и-ответы)
-- [Ограничения](#ограничения)
-- [Для разработчиков](#для-разработчиков)
 
 ---
 
-## Возможности
+## ✨ Что умеет
+
+### Хедлайнеры
+
+- 🎤 **Голосовые в обе стороны** &nbsp;`NEW`&nbsp; — из MAX **играют** прямо в Telegram, а ваши
+  голосовые из Telegram приходят в MAX **настоящим** голосовым (волна + длительность).
+  *Этого не умеет даже веб-клиент MAX* — раскопали в протоколе мобильного приложения.
+- 🔄 **Правки · удаления · реакции — вживую** &nbsp;`NEW`&nbsp; — отредактировали, удалили или
+  поставили реакцию в одном мессенджере → мгновенно видно в другом. В **обе** стороны.
+- 🗑 **`/del` — удалить у всех** &nbsp;`NEW`&nbsp; — передумали? Ответьте `/del` на своё сообщение —
+  и оно исчезнет **у собеседника** в MAX.
+- 🗂 **Тема на каждый чат** — форум Telegram: каждый диалог MAX = отдельная тема с именем собеседника.
+- 🎮 **Управление из Telegram** — `/dm` написать человеку по номеру, `/join` вступить в канал.
+
+### Всё остальное
 
 | | |
 |---|---|
-| <img src="assets/apple.svg" height="15"> **Работает на iOS** | MAX удалён из App Store — а здесь все диалоги приходят в Telegram, который на iPhone есть всегда |
-| 🔔 **Уведомления** | Пуши о новых сообщениях MAX приходят как обычные уведомления Telegram — на iOS это единственный способ их получать |
-| ↔️ **Двусторонний** | Не просто пересылка — отвечаете **из Telegram**, и сообщение уходит в чат MAX |
-| 🗂 **Темы** | Каждый MAX-чат = отдельная тема Telegram-форума с именем собеседника |
-| 🎮 **Команды** | Управляйте MAX из Telegram — `/dm`, `/join`, и `/del` (удалить своё сообщение у всех) |
-| 🖼 **Медиа** | Фото, видео, файлы, стикеры — в обе стороны |
-| 🎤 **Голосовые** | Из MAX — **играют** в Telegram; из Telegram — уходят в MAX **нативным** голосовым (волна + длительность) |
-| 🔄 **Правки · удаления · реакции** | Зеркалятся в **обе стороны**: изменили / удалили / реагировали в одном — видно в другом |
-| 🔒 **Приватно** | Токены и переписка остаются у вас; ничего не уходит на чужие серверы |
-| 🆓 **Бесплатно** | Без подписок, открытый код (MIT) |
-| 🖥 **Где угодно** | Windows, старый Android (Termux) или сервер 24/7 |
+| 🔔 **Уведомления** | пуши о новых сообщениях MAX — как обычные уведомления Telegram |
+| ↔️ **Двусторонний** | не пересылка, а полноценный диалог: отвечаете из Telegram — уходит в MAX |
+| 🖼 **Медиа** | фото, видео, файлы, стикеры, GIF — в обе стороны |
+| ↪️ **Пересланное** | разворачивает реальный текст/медиа, а не пустую «Отправитель:» |
+| 🔒 **Приватно** | токены и переписка остаются у вас; ничего не уходит на чужие серверы |
+| 🆓 **Бесплатно** | без подписок, открытый код (MIT) |
+| 🖥 **Где угодно** | Windows, старый Android (Termux) или сервер 24/7 (Docker) |
+| ✅ **Надёжно** | 478 авто-тестов, ~88% покрытие, CI на каждый коммит |
 
 **Что именно передаётся:**
 
 | Направление | Содержимое |
 |---|---|
-| **MAX → Telegram** | текст, фото, видео, файлы, стикеры, **голосовые (играют)**, **правки · удаления · реакции** |
-| **Telegram → MAX** | текст, фото, видео, файлы, **нативные голосовые**, **правки · реакции**, удаление через `/del` |
+| **MAX → Telegram** | текст · фото · видео · файлы · стикеры · **голосовые (играют)** · **правки · удаления · реакции** |
+| **Telegram → MAX** | текст · фото · видео · файлы · **нативные голосовые** · **правки · реакции** · удаление через `/del` |
 
 ---
 
-## Быстрый старт
+## ⚡ Быстрый старт
 
-**Windows, ~5 минут.** Запустите **`run.bat`** — мастер настройки попросит три
-вещи:
+**Windows, ~5 минут.** Запустите **`run.bat`** — мастер настройки попросит три вещи:
 
 **1. Токен Telegram-бота**
-Создайте бота у [@BotFather](https://t.me/BotFather) командой `/newbot` и
-скопируйте выданный токен.
+Создайте бота у [@BotFather](https://t.me/BotFather) командой `/newbot` и скопируйте токен.
 
 **2. `/start` вашему боту**
 Напишите боту `/start`, чтобы мост узнал, куда слать сообщения.
 
 **3. Токен MAX**
-Войдите на [web.max.ru](https://web.max.ru), нажмите `F12` → вкладка **Console**,
-выполните команду и вставьте результат в мастер:
+Войдите на [web.max.ru](https://web.max.ru), нажмите `F12` → вкладка **Console**, выполните
+команду и вставьте результат в мастер:
 
 ```js
 copy(JSON.parse(localStorage.__oneme_auth).token)
 ```
 
-> ⚠️ **Не нажимайте «Выйти» (Logout)** в web.max.ru — это аннулирует токен.
-> Просто закройте вкладку. Токен хранится локально в `config.json`.
+> ⚠️ **Не нажимайте «Выйти» (Logout)** в web.max.ru — это аннулирует токен. Просто закройте
+> вкладку. Токен хранится локально в `config.json`.
 
-Готово ✅ Это **базовый режим**: все сообщения MAX приходят в одну личку с ботом.
-Дальше советуем включить [режим тем](#-режим-тем) — так гораздо удобнее.
+**Готово ✅** Это базовый режим — все сообщения MAX в одной личке с ботом. Дальше включите
+[режим тем](#-режим-тем) — так в разы удобнее. 👇
 
 ---
 
-## ⭐ Режим тем
+## 🗂 Режим тем
 
-Чтобы каждый MAX-чат стал **отдельной темой** Telegram-форума, а не сваливался в
-одну ленту:
+Чтобы каждый MAX-чат стал **отдельной темой** Telegram-форума, а не сваливался в одну ленту:
 
 1. Создайте **Telegram-супергруппу** и включите в настройках **«Темы» (Topics)**.
-2. **Добавьте бота в группу**, дайте права **администратора** с разрешением
-   **«Управление темами» (Manage Topics)** — без этого мост не создаст темы.
-3. Узнайте **id группы** (начинается с `-100…`, например через
-   [@getidsbot](https://t.me/getidsbot)) и пропишите в `config.json`:
+2. **Добавьте бота** в группу, дайте права **администратора** с разрешением **«Управление темами»**
+   — без этого мост не создаст темы.
+3. Узнайте **id группы** (начинается с `-100…`, например через [@getidsbot](https://t.me/getidsbot))
+   и пропишите в `config.json`:
 
 ```json
 {
@@ -133,8 +146,8 @@ copy(JSON.parse(localStorage.__oneme_auth).token)
 }
 ```
 
-Каждый MAX-чат получит свою тему с именем собеседника. Пишете в теме — уходит в
-этот чат MAX; **Reply** (свайп) отправляет ответ цитатой.
+Каждый MAX-чат получит свою тему с именем собеседника. Пишете в теме — уходит в этот чат MAX;
+**Reply** (свайп) отправляет ответ цитатой.
 
 ---
 
@@ -149,26 +162,22 @@ copy(JSON.parse(localStorage.__oneme_auth).token)
 | `/del` (ответом на своё) | **Удалить своё сообщение у всех в MAX.** Ответьте `/del` (или `/delete`) на отправленное вами сообщение в теме — оно исчезнет у собеседника. |
 | `/help` · `/start` | Справка и приветствие. |
 
-Просто: **люди — `/dm` по телефону, каналы — `/join` по ссылке.**
-
-Примеры:
+Просто: **люди — `/dm` по телефону, каналы — `/join` по ссылке, удалить своё — `/del` ответом.**
 
 ```
 /dm +79991234567 привет            # написать человеку по телефону
-/dm 21243808 привет                # написать по id
 /join https://max.ru/join/AbCdEf   # вступить в канал/чат по ссылке (или просто пришлите ссылку)
 ```
 
 > ℹ️ **Ответить в существующий чат** — `Reply` (свайп) на пересланном сообщении: уйдёт точно туда.
->
-> Поиск каналов по **названию** MAX не поддерживает — только по ссылке/@нику (`/join`).
+> Поиск каналов по **названию** MAX не поддерживает — только по ссылке/@нику.
 
 ---
 
-## Запуск на сервере 24/7
+## 🌐 Сервер 24/7
 
-Мост держит постоянное соединение, поэтому ему нужен хост, который **не
-«засыпает»** (обычные бесплатные «спящие» PaaS не подойдут).
+Мост держит постоянное соединение, поэтому ему нужен хост, который **не «засыпает»**
+(обычные бесплатные «спящие» PaaS не подойдут).
 
 | Где | Как |
 |---|---|
@@ -191,60 +200,52 @@ docker compose up -d      # подтянет ghcr.io/sillkiin/max2tg:latest
 
 ---
 
-## Вопросы и ответы
+## ❓ Вопросы и ответы
 
 <details>
 <summary><b>Канал шлёт слишком много уведомлений — как заглушить?</b></summary>
 
-<br>Заглушите <b>тему</b> штатными средствами Telegram: долгий тап по теме в
-списке → <b>«Выключить уведомления»</b> (или внутри темы → тап по названию →
-отключить уведомления). В форуме глушится <b>каждая тема отдельно</b> — каналам
-выключите, людям оставите. Это полностью убирает уведомление (и звук, и баннер).
-Бот сам сделать это не может: «без звука» он отправить умеет, но совсем убрать
-пуш — настройка на стороне Telegram, которую ставите вы.
+<br>Заглушите <b>тему</b> штатными средствами Telegram: долгий тап по теме в списке →
+<b>«Выключить уведомления»</b>. В форуме глушится <b>каждая тема отдельно</b> — каналам выключите,
+людям оставите. Это полностью убирает и звук, и баннер.
 </details>
 
 <details>
 <summary><b>Темы пересоздаются после каждого перезапуска</b></summary>
 
-<br>Значит не сохраняется `state.json` (карта «MAX-чат → тема»). В Docker он лежит
-на постоянном томе (`docker-compose.yml`); путь можно задать через
-`MAX2TG_STATE_PATH`. Без Docker файл хранится рядом со скриптами.
+<br>Значит не сохраняется <code>state.json</code> (карта «MAX-чат → тема»). В Docker он лежит на
+постоянном томе; путь задаётся через <code>MAX2TG_STATE_PATH</code>. Без Docker файл хранится рядом со скриптами.
 </details>
 
 <details>
 <summary><b>Как убрать «✅ Отправлено в MAX» после каждого ответа</b></summary>
 
-<br>Добавьте в `config.json`: <code>"telegram_confirm_sent": false</code> (или
-переменную окружения <code>MAX2TG_TELEGRAM_CONFIRM_SENT=false</code>). Ошибки
-отправки при этом всё равно показываются.
+<br>Добавьте в <code>config.json</code>: <code>"telegram_confirm_sent": false</code>. Ошибки отправки
+при этом всё равно показываются.
 </details>
 
 <details>
 <summary><b>Мост пишет, что токен MAX устарел</b></summary>
 
-<br>Получите свежий токен на <a href="https://web.max.ru">web.max.ru</a> (та же
-команда в консоли) и обновите его в <code>config.json</code> или в
-<code>.env</code>, затем перезапустите мост.
+<br>Получите свежий токен на <a href="https://web.max.ru">web.max.ru</a> (та же команда в консоли)
+и обновите его в <code>config.json</code> или <code>.env</code>, затем перезапустите мост.
 </details>
 
 ---
 
-## Ограничения
+## ⚖️ Ограничения
 
-- ⚙️ **Неофициальный API MAX** (через [vkmax](https://github.com/nsdkinx/vkmax) —
-  официального API для личных аккаунтов нет). Для MAX это выглядит как вход через
-  веб-версию; теоретически он может ограничить сессию.
-- 🎤 **Голосовые** работают в обе стороны через **недокументированный** аудио-эндпоинт
-  MAX (из MAX играют в Telegram, из Telegram уходят нативным голосовым) — если MAX
-  поменяет его, понадобится правка.
-- 📦 **Файлы и видео до ~50 МБ** (лимит Telegram-ботов); крупнее — уведомление
-  «открыть в MAX».
+- ⚙️ **Неофициальный API MAX** (через [vkmax](https://github.com/nsdkinx/vkmax) — официального API
+  для личных аккаунтов нет). Для MAX это выглядит как вход через веб-версию; теоретически он может
+  ограничить сессию.
+- 🎤 **Голосовые** работают через **недокументированный** аудио-эндпоинт MAX (разобран из приложений)
+  — если MAX его поменяет, понадобится правка.
+- 📦 **Файлы и видео до ~50 МБ** (лимит Telegram-ботов); крупнее — уведомление «открыть в MAX».
 - 🔑 **Токены** лежат локально в `config.json` (в `.gitignore`, не коммитятся).
 
 ---
 
-## Для разработчиков
+## 🛠 Для разработчиков
 
 <details>
 <summary>Структура проекта и сборка</summary>
@@ -263,11 +264,11 @@ docker compose up -d      # подтянет ghcr.io/sillkiin/max2tg:latest
 | `Dockerfile` / `docker-compose*.yml` / `DEPLOY.md` | деплой |
 
 ```bash
-python -m unittest discover -s tests     # тесты
+python -m unittest discover -s tests     # 478 тестов, ~88% покрытие
 ```
 
-CI (GitHub Actions) на каждый push в `main` гоняет тесты и публикует
-Docker-образ `ghcr.io/sillkiin/max2tg:latest`. Для локальной сборки из исходников:
+CI (GitHub Actions) на каждый push в `main` гоняет тесты и публикует Docker-образ
+`ghcr.io/sillkiin/max2tg:latest`. Локальная сборка из исходников:
 `docker compose -f docker-compose.build.yml up -d --build`.
 </details>
 
@@ -278,38 +279,32 @@ Docker-образ `ghcr.io/sillkiin/max2tg:latest`. Для локальной с
 <details>
 <summary>Click to expand</summary>
 
-<br>**max2tg** mirrors your personal **MAX** (max.ru) messenger account into
-**Telegram** and lets you reply from there.
+<br><b>max2tg</b> mirrors your personal <b>MAX</b> (max.ru) messenger into <b>Telegram</b> — both ways —
+and lets you reply from there.
 
-> <img src="assets/apple.svg" height="15"> **MAX is gone from the App Store** — you can't install it on iPhone/iPad
-> anymore. max2tg brings every MAX chat into **Telegram** (which you already
-> have) **with normal push notifications** — effectively the only way to use MAX
-> on iOS.
+> <img src="assets/apple.svg" height="15"> <b>MAX is gone from the App Store.</b> You can't install it
+> on iPhone/iPad anymore. max2tg brings every MAX chat into <b>Telegram</b> (which you already have)
+> <b>with normal push notifications</b> — effectively the only way to use MAX on iOS.
 
-- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers, **voice** —
-  are forwarded to Telegram; reply right from Telegram and it lands in the MAX chat.
-- **Edits, deletions and reactions mirror both ways**; MAX voice plays in Telegram and
-  Telegram voice notes arrive in MAX as a native voice message.
+- **Two-way.** Incoming MAX messages — text, photos, videos, files, stickers, **voice** — are
+  forwarded to Telegram; reply right from Telegram and it lands in the MAX chat.
+- **Voice both ways & live sync.** MAX voice **plays** in Telegram and Telegram voice notes arrive in
+  MAX as a **native** voice message; **edits, deletions and reactions mirror both ways**.
 - **Topics.** Each MAX chat becomes its own Telegram forum topic, named after the contact.
-- **Commands** (shown in the "/" menu): `/dm <phone | id> <text>` — message a person ·
-  `/join <link | @username>` — join a MAX channel/group/chat · `/del` (reply to your own
-  message) — delete it for everyone in MAX · `/help` — command reference.
-- **Private & free.** Tokens and messages stay on your machine. Open-source (MIT).
-- **Runs anywhere.** Windows, old Android (Termux), or a 24/7 server. Pull the
-  ready image: `docker pull ghcr.io/sillkiin/max2tg:latest`.
+- **Commands** (in the "/" menu): `/dm <phone | id> <text>` — message a person · `/join <link | @username>`
+  — join a channel/group/chat · `/del` (reply to your own message) — delete it for everyone in MAX · `/help`.
+- **Private, free, tested.** Tokens and messages stay on your machine. Open-source (MIT), 478 tests, ~88% coverage.
 
-**Quick start:** run `run.bat`, create a bot via [@BotFather](https://t.me/BotFather),
-and paste your MAX token from [web.max.ru](https://web.max.ru) (DevTools console:
-`copy(JSON.parse(localStorage.__oneme_auth).token)`).
+**Quick start:** run `run.bat`, create a bot via [@BotFather](https://t.me/BotFather), and paste your MAX
+token from [web.max.ru](https://web.max.ru) (DevTools console: `copy(JSON.parse(localStorage.__oneme_auth).token)`).
 
-> ⚠️ Uses MAX's **unofficial** web API (voice relies on an undocumented audio
-> endpoint, reverse-engineered from the apps). Use at your own risk.
+> ⚠️ Uses MAX's **unofficial** web API (voice relies on an undocumented audio endpoint,
+> reverse-engineered from the apps). Use at your own risk.
 </details>
 
 ---
 
-## Дисклеймер
-
-Личный инструмент для удобства, не связан с MAX/VK и Telegram. Использует
-неофициальный API — применяйте на свой риск и соблюдайте условия сервисов.
-**Лицензия: [MIT](LICENSE).**
+<p align="center">
+  <sub>Личный инструмент для удобства, не связан с MAX/VK и Telegram. Использует неофициальный API —
+  применяйте на свой риск и соблюдайте условия сервисов. &nbsp;·&nbsp; <b>Лицензия: <a href="LICENSE">MIT</a></b></sub>
+</p>
