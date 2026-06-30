@@ -9,7 +9,6 @@ import json
 import logging
 import re
 from collections import OrderedDict
-from pathlib import Path
 
 from vkmax.client import MaxClient
 from vkmax.functions.messages import reply_message as max_reply
@@ -23,6 +22,7 @@ import mediamax
 import tg
 from fileperms import restrict_to_owner
 from max_client import BrowserMaxClient, MaxAuthError
+from paths import data_path
 from state import BridgeState, normalize_topic_title
 
 _logger = logging.getLogger(__name__)
@@ -55,12 +55,12 @@ SEEN_MESSAGES_LIMIT = 10000
 MEDIA_CONCURRENCY = 8
 # Telegram bots can upload at most 50 MB; leave headroom.
 TELEGRAM_UPLOAD_LIMIT = 49 * 1024 * 1024
-ATTACH_DEBUG_LOG = Path(__file__).parent / "attaches.log"
+ATTACH_DEBUG_LOG = data_path("attaches.log")
 ATTACH_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
 # Capped, owner-locked capture of edit/delete/reaction push frames so the
 # reverse-engineered (partly inferred) payload shapes can be confirmed against
 # real data. Frames hold message text/ids, so it is size-capped and ACL-locked.
-EVENT_DEBUG_LOG = Path(__file__).parent / "events.log"
+EVENT_DEBUG_LOG = data_path("events.log")
 EVENT_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
 EVENT_FRAME_MAX_CHARS = 20000
 # Session watchdog: poll the live MAX session this often, and treat total silence

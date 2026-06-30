@@ -8,10 +8,14 @@ from pathlib import Path
 from bridge import MaxToTelegramBridge
 from config import apply_dotenv, load_config
 from fileperms import restrict_to_owner
+from paths import data_path
 from setup_wizard import run_setup
 from singleton import acquire_single_instance
 
-LOG_PATH = Path(__file__).parent / "bridge.log"
+LOG_PATH = data_path("bridge.log")  # churny -> follows MAX2TG_DATA_DIR (e.g. HDD)
+# The lock stays on the app disk: it is written once at startup (no churn) and
+# must work even if the data disk is slow to mount at boot, so the single-instance
+# guard is reliable regardless of MAX2TG_DATA_DIR.
 LOCK_PATH = Path(__file__).parent / "max2tg.lock"
 
 _logger = logging.getLogger(__name__)

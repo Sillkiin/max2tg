@@ -8,10 +8,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Where the MAX-chat -> Telegram-topic map is stored. Override with
-# MAX2TG_STATE_PATH to keep it on a persistent volume (e.g. in Docker), so
-# topics survive container restarts/rebuilds instead of being recreated.
-STATE_PATH = Path(os.environ.get("MAX2TG_STATE_PATH") or (Path(__file__).parent / "state.json"))
+from paths import data_path
+
+# Where the MAX-chat -> Telegram-topic map (and the /del map) is stored. Override
+# with MAX2TG_STATE_PATH for a persistent volume (e.g. a single-file Docker
+# mount); otherwise it lives under MAX2TG_DATA_DIR (default: the app directory),
+# so churny per-message writes can be moved off an SSD onto a spinning disk.
+STATE_PATH = Path(os.environ.get("MAX2TG_STATE_PATH") or data_path("state.json"))
 
 _logger = logging.getLogger(__name__)
 
